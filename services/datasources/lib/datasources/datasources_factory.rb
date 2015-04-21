@@ -1,4 +1,11 @@
 # encoding: utf-8
+require_relative './url/arcgis'
+require_relative './url/dropbox'
+require_relative './url/gdrive'
+require_relative './url/instagram_oauth'
+require_relative './url/mailchimp'
+require_relative './url/public_url'
+require_relative 'search/twitter'
 
 module CartoDB
   module Datasources
@@ -9,19 +16,30 @@ module CartoDB
         # Retrieve a datasource instance
         # @param datasource_name string
         # @param user User
-        # @param redis Redis|nil (optional)
+        # @param additional_config Hash
+        # {
+        #   :redis_storage => Redis|nil
+        #   :ogr2ogr_instance => Ogr2ogr|nil
+        # }
         # @return mixed
         # @throws MissingConfigurationError
-        def self.get_datasource(datasource_name, user, redis_storage = nil)
+        def self.get_datasource(datasource_name, user, additional_config = {})
           case datasource_name
             when Url::Dropbox::DATASOURCE_NAME
               Url::Dropbox.get_new(DatasourcesFactory.config_for(datasource_name, user), user)
             when Url::GDrive::DATASOURCE_NAME
               Url::GDrive.get_new(DatasourcesFactory.config_for(datasource_name, user), user)
+            when Url::InstagramOAuth::DATASOURCE_NAME
+              Url::InstagramOAuth.get_new(DatasourcesFactory.config_for(datasource_name, user), user)
             when Url::PublicUrl::DATASOURCE_NAME
-              Url::PublicUrl.get_new()
+              Url::PublicUrl.get_new
+            when Url::ArcGIS::DATASOURCE_NAME
+              Url::ArcGIS.get_new(user)
+            when Url::MailChimp::DATASOURCE_NAME
+              Url::MailChimp.get_new(DatasourcesFactory.config_for(datasource_name, user), user)
             when Search::Twitter::DATASOURCE_NAME
-              Search::Twitter.get_new(DatasourcesFactory.config_for(datasource_name, user), user, redis_storage)
+              Search::Twitter.get_new(DatasourcesFactory.config_for(datasource_name, user), user,
+                                      additional_config[:redis_storage], additional_config[:user_defined_limits])
             when nil
               nil
             else
@@ -40,7 +58,8 @@ module CartoDB
           includes_customized_config = false
 
           case datasource_name
-            when Url::Dropbox::DATASOURCE_NAME, Url::GDrive::DATASOURCE_NAME
+            when Url::Dropbox::DATASOURCE_NAME, Url::GDrive::DATASOURCE_NAME, Url::InstagramOAuth::DATASOURCE_NAME,
+                 Url::MailChimp::DATASOURCE_NAME
               config = (config_source[:oauth] rescue nil)
               config ||= (config_source[:oauth.to_s] rescue nil)
             when Search::Twitter::DATASOURCE_NAME
@@ -56,11 +75,23 @@ module CartoDB
           end
 
           if includes_customized_config
+            custom_config_orgs = config[datasource_name].fetch(:customized_orgs_list.to_s, [])
             custom_config_users = config[datasource_name][:customized_user_list.to_s]
-            if custom_config_users.include?(user.username)
-              config[datasource_name][:customized.to_s]
+
+            if !user.organization.nil? && custom_config_orgs.include?(user.organization.name)
+              key = user.organization.name
+            elsif custom_config_users.include?(user.username)
+              key = user.username
             else
+              key = nil
+            end
+
+            if key.nil?
               config[datasource_name][:standard.to_s]
+            else
+              # This code assumes config is ok
+              name_config_map = config[datasource_name]['entity_to_config_map'].select { |u| !u[key].nil? }.first
+              config[datasource_name][:customized.to_s][name_config_map[key]]
             end
           else
             config.fetch(datasource_name)

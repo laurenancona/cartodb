@@ -1,7 +1,17 @@
 defaults: &defaults
+  users_dumps:
+    service:
+      port: 0000
+  ogr2ogr:
+    binary:           'which ogr2ogr'
+    csv_guessing:     false
   debug_assets: true
   mandatory_keys:     [layer_opts, sql_api, varnish_management, redis, session_domain]
   session_domain:     '.localhost.lan'
+  # If activated, urls will use usernames in format //SESSION_DOMAIN/user/USERNAME and ignore subdomains if present
+  subdomainless_urls: false
+  http_port:           # nil|integer. HTTP port to use when building urls. Leave empty to use default (80)
+  https_port:          # nil|integer. HTTPS port to use when building urls. Leave empty to use default (443)
   secret_token:       '71c2b25921b84a1cb21c71503ab8fb23'
   account_host:       'localhost:3000'
   account_path:       '/account'
@@ -41,6 +51,12 @@ defaults: &defaults
     domain:           ''
   tumblr:
     api_key: ''
+  trackjs:
+    enabled: false
+    customer: ''
+    app_keys:
+      editor: ''
+      embeds: ''
   varnish_management:
     critical: false
     host: '127.0.0.1'
@@ -86,6 +102,7 @@ defaults: &defaults
       secret_access_key:
       bucket_name:
       url_ttl:
+      async_long_uploads: false
   error_track:
     url: 'https://viz2.cartodb.com/api/v1/sql'
     percent_users: 10
@@ -145,6 +162,11 @@ defaults: &defaults
         style: ""
   cartodb_com_hosted: true
   cartodb_central_domain_name: 'cartodb.com'
+  cartodb_central_api:
+    host: 'admin.localhost.lan'
+    port: 4000
+    username: 'api'
+    password: 'test'
   aws:
     s3:
       access_key_id: "test"
@@ -173,6 +195,14 @@ defaults: &defaults
       app_key:  ''
       app_secret: ''
       callback_url: ''
+    instagram:
+      app_key:              ''
+      app_secret:           ''
+      callback_url:         ''
+    mailchimp:
+      app_key:              ''
+      app_secret:           ''
+      callback_url:         ''
   datasource_search:
     # Must be the same as CartoDB::Datasources::xxxx DATASOURCE_NAME constants
     twitter_search:
@@ -186,15 +216,18 @@ defaults: &defaults
         ratelimit_ttl:          4
         ratelimit_wait_secs:    0.5
       customized_user_list:     []
+      customized_orgs_list:     []
+      entity_to_config_map:     [] # { user_or_org_name: 'custom_config_name'}
       customized:
-        auth_required:          false
-        username:               ''
-        password:               ''
-        search_url:             'http://fake.url.nil'
-        ratelimit_active:       false
-        ratelimit_concurrency:  3
-        ratelimit_ttl:          4
-        ratelimit_wait_secs:    0.1
+        custom1:
+            auth_required:          false
+            username:               ''
+            password:               ''
+            search_url:             'http://fake.url.nil'
+            ratelimit_active:       false
+            ratelimit_concurrency:  3
+            ratelimit_ttl:          4
+            ratelimit_wait_secs:    0.1
   signups:
     service:
       port: 0000
@@ -204,6 +237,7 @@ defaults: &defaults
 
 development:
   <<: *defaults
+  http_port: 3000
   varnish_management:
     critical: false
     host: '127.0.0.1'
@@ -216,6 +250,7 @@ development:
 
 test:
   <<: *defaults
+  http_port: 53716
   redis:
     host: '127.0.0.1'
     port: 6335

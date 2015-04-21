@@ -1,6 +1,7 @@
 require_relative '../spec_helper'
 
 require_relative '../../app/models/visualization/collection'
+require_relative '../../services/relocator/worker'
 
 include CartoDB
 
@@ -12,13 +13,42 @@ describe Organization do
 
   after(:all) do
     Visualization::Member.any_instance.stubs(:has_named_map?).returns(false)
-    @user.destroy
+    begin
+      @user.destroy
+    rescue
+      # Silence error, can't do much more
+    end
   end
 
+  describe '#destroy_cascade' do
+    it 'Destroys users and owner as well' do
+      organization = Organization.new(quota_in_bytes: 1234567890, name: 'wadus', seats: 5).save
+
+      owner = create_user(:quota_in_bytes => 524288000, :table_quota => 500)
+      owner_org = CartoDB::UserOrganization.new(organization.id, owner.id)
+      owner_org.promote_user_to_admin
+      owner.reload
+      organization.reload
+
+      user = create_user(:quota_in_bytes => 524288000, :table_quota => 500)
+      CartoDB::Relocator::Worker.organize(user, organization)
+      user.save
+      user.reload
+      organization.reload
+
+      organization.destroy_cascade
+      Organization.where(id: organization.id).first.should be nil
+      User.where(id: user.id).first.should be nil
+      User.where(id: owner.id).first.should be nil
+    end
+  end
+
+
+
   describe '#add_user_to_org' do
-    it 'Tests adding a user to an organization' do
-      org_name = 'wadus'
+    it 'Tests adding a user to an organization (but no owner)' do
       org_quota = 1234567890
+      org_name = 'wadus'
       org_seats = 5
 
       username = @user.username
@@ -49,6 +79,123 @@ describe Organization do
       @user.organization = nil
       @user.save
       organization.destroy
+    end
+
+    it 'Tests setting a user as the organization owner' do
+      organization = Organization.new(quota_in_bytes: 1234567890, name: 'wadus', seats: 5).save
+
+      user = create_user(:quota_in_bytes => 524288000, :table_quota => 500)
+
+      user_org = CartoDB::UserOrganization.new(organization.id, user.id)
+      # This also covers the usecase of an user being moved to its own schema (without org)
+      user_org.promote_user_to_admin
+
+      organization.reload
+      user.reload
+
+      user.organization.id.should eq organization.id
+      user.organization.owner.id.should eq user.id
+
+      user.database_schema.should eq user.username
+
+      user_org = CartoDB::UserOrganization.new(organization.id, user.id)
+      expect {
+        user_org.promote_user_to_admin
+      }.to raise_error
+
+      user.destroy
+    end
+  end
+
+  describe '#org_members_and_owner_removal' do
+    it 'Tests removing a normal member from the organization' do
+      organization = Organization.new(quota_in_bytes: 1234567890, name: 'wadus', seats: 5).save
+
+      owner = create_user(:quota_in_bytes => 524288000, :table_quota => 500)
+
+      user_org = CartoDB::UserOrganization.new(organization.id, owner.id)
+      user_org.promote_user_to_admin
+
+      organization.reload
+      owner.reload
+
+      member1 = create_user(:quota_in_bytes => 524288000, :table_quota => 500)
+      CartoDB::Relocator::Worker.organize(member1, organization)
+      member1.reload
+      organization.reload
+
+      member2 = create_user(:quota_in_bytes => 524288000, :table_quota => 500)
+      CartoDB::Relocator::Worker.organize(member2, organization)
+      member2.reload
+
+      organization.users.count.should eq 3
+
+      results = member1.in_database(as: :public_user).fetch(%Q{
+        SELECT has_function_privilege('#{member1.database_public_username}', 'cdb_querytables(text)', 'execute')
+      }).first
+      results.nil?.should eq false
+      results[:has_function_privilege].should eq true
+
+      member1.destroy
+      organization.reload
+
+      organization.users.count.should eq 2
+
+      results = member2.in_database(as: :public_user).fetch(%Q{
+        SELECT has_function_privilege('#{member2.database_public_username}', 'cdb_querytables(text)', 'execute')
+      }).first
+      results.nil?.should eq false
+      results[:has_function_privilege].should eq true
+
+      # Can't remove owner if other members exist
+      expect {
+        owner.destroy
+      }.to raise_error CartoDB::BaseCartoDBError
+
+      member2.destroy
+      organization.reload
+
+      organization.users.count.should eq 1
+
+      results = owner.in_database(as: :public_user).fetch(%Q{
+        SELECT has_function_privilege('#{owner.database_public_username}', 'cdb_querytables(text)', 'execute')
+      }).first
+      results.nil?.should eq false
+      results[:has_function_privilege].should eq true
+
+      owner.destroy
+
+      expect {
+        organization.reload
+      }.to raise_error Sequel::Error
+    end
+  end
+
+  describe '#non_org_user_removal' do
+    it 'Tests removing a normal user' do
+      User.all.count.should eq 1  # @user
+      User.first.id.should eq @user.id
+
+      user = create_user(:quota_in_bytes => 524288000, :table_quota => 50)
+
+      User.all.count.should eq 2
+
+      user.destroy
+
+      User.all.count.should eq 1  # @user
+      User.first.id.should eq @user.id
+    end
+  end
+
+  describe '#users_in_same_db_removal_error' do
+    it "Tests that if 2+ users somehow have same database name, can't be deleted" do
+      user2 = create_user(:quota_in_bytes => 524288000, :table_quota => 50, :database_name => @user.database_name)
+      user2.database_name = @user.database_name
+      user2.save
+
+      expect {
+        user2.destroy
+      }.to raise_error CartoDB::BaseCartoDBError
     end
   end
 
@@ -249,7 +396,7 @@ describe Organization do
         description:  attributes.fetch(:description, "description #{random}"),
         privacy:      attributes.fetch(:privacy, Visualization::Member::PRIVACY_PUBLIC),
         tags:         attributes.fetch(:tags, ['tag 1']),
-        type:         attributes.fetch(:type, Visualization::Member::DERIVED_TYPE),
+        type:         attributes.fetch(:type, Visualization::Member::TYPE_DERIVED),
         user_id:      attributes.fetch(:user_id, UUIDTools::UUID.timestamp_create.to_s)
     }
   end #random_attributes

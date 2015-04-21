@@ -38,6 +38,8 @@ module CartoDB
         @http_options = http_options
         @seed         = seed
         @repository   = repository || DataRepository::Filesystem::Local.new(temporary_directory)
+        @datasource = nil
+        @source_file = nil
 
         translators = URL_TRANSLATORS.map(&:new)
         translator = translators.find { |translator| translator.supported?(url) }
@@ -48,119 +50,24 @@ module CartoDB
           @translated_url = translator.translate(url)
           @custom_filename = translator.respond_to?(:rename_destination) ? translator.rename_destination(url) : nil
         end
-      end #initialize
+      end
+
+      def provides_stream?
+        false
+      end
 
       def run(available_quota_in_bytes=nil)
         set_local_source_file || set_downloaded_source_file(available_quota_in_bytes)
         self
       end
 
-      def set_local_source_file
-        return false if valid_url?
-        self.source_file = SourceFile.new(url)
-        self
-      end
-
-      def valid_url?
-        url =~ URL_RE
-      end
-
-      def set_downloaded_source_file(available_quota_in_bytes=nil)
-        raise_if_over_storage_quota(headers, available_quota_in_bytes)
-        @etag           = etag_from(headers)
-        @last_modified  = last_modified_from(headers)
-        return self unless modified?
-
-        download_and_store
-
-        self.source_file  = nil unless modified?
-        self
-      end
-
-
-      def raise_if_over_storage_quota(headers, available_quota_in_bytes=nil)
-        return self unless available_quota_in_bytes
-        raise StorageQuotaExceededError if 
-          content_length_from(headers) > available_quota_in_bytes.to_i
-      end
-
-      def typhoeus_options
-        verify_ssl = http_options.fetch(:verify_ssl_cert, false)
-        {
-          cookiefile:     cookiejar,
-          cookiejar:      cookiejar,
-          followlocation: true,
-          ssl_verifypeer: verify_ssl,
-          ssl_verifyhost: (verify_ssl ? 2 : 0)
-        }
-      end 
-
-      def headers
-        @headers ||= Typhoeus.head(@translated_url, typhoeus_options).headers
-      end
-
-      def cookiejar
-        repository.fullpath_for("#{seed}_cookiejar")
-      end
-
-      def download_and_store
-        name = ''
-        download_error = false
-
-        temp_name = filepath(DEFAULT_FILENAME << '_' << random_name)
-
-        downloaded_file = File.open(temp_name, 'wb')
-        request = Typhoeus::Request.new(@translated_url, typhoeus_options)
-        request.on_headers do |response|
-          unless response.success?
-            download_error = true
-          end
-        end
-        request.on_body do |chunk|
-          downloaded_file.write(chunk)
-        end
-        request.on_complete do |response|
-          downloaded_file.close
-
-          headers = response.headers
-
-          name            = name_from(headers, url, @custom_filename)
-          @etag           = etag_from(headers)
-          @last_modified  = last_modified_from(headers)
-        end
-        request.run
-
-        raise DownloadError if download_error
-
-        File.rename(temp_name, filepath(name))
-
-        # Just return the source file structure
-        self.source_file  = SourceFile.new(filepath(name), name)
-      end #download_and_store
-
       def clean_up
-        if defined?(@temporary_directory) \
-           && @temporary_directory =~ /^#{CartoDB::Importer2::Unp::IMPORTER_TMP_SUBFOLDER}/ \
-           && !(@temporary_directory =~ /\.\./)
+        if defined?(@temporary_directory) &&
+           @temporary_directory =~ /^#{CartoDB::Importer2::Unp::IMPORTER_TMP_SUBFOLDER}/ &&
+           !(@temporary_directory =~ /\.\./)
           FileUtils.rm_rf @temporary_directory
         end
       end
-
-      def name_from(headers, url, custom=nil)
-        name =  custom || name_from_http(headers) || name_in(url)
-        if name == nil || name == ''
-          random_name
-        else
-          name
-        end
-      end #filename_from
-
-      def content_length_from(headers)
-        content_length = headers.fetch('Content-Length', nil)
-        content_length ||= headers.fetch('Content-length', nil)
-        content_length ||= headers.fetch('content-length', -1)
-        content_length.to_i
-      end #content_length_from
 
       def modified?
         previous_etag           = http_options.fetch(:etag, false)
@@ -176,6 +83,174 @@ module CartoDB
         false
       end
 
+      def checksum
+        etag_from(headers)
+      end
+
+      def multi_resource_import_supported?
+        false
+      end
+
+      def set_limits(limits={})
+        # not supported
+      end
+
+      attr_reader   :source_file, :datasource, :etag, :last_modified
+      attr_accessor :url
+
+      private
+      
+      attr_reader :http_options, :repository, :seed
+      attr_writer :source_file
+
+      def set_local_source_file
+        return false if valid_url?
+        self.source_file = SourceFile.new(url)
+        self
+      end
+
+      def set_downloaded_source_file(available_quota_in_bytes=nil)
+        raise_if_over_storage_quota(headers, available_quota_in_bytes)
+        @etag           = etag_from(headers)
+        @last_modified  = last_modified_from(headers)
+        return self unless modified?
+
+        download_and_store
+
+        self.source_file  = nil unless modified?
+        self
+      end
+
+      def raise_if_over_storage_quota(headers, available_quota_in_bytes=nil)
+        return self unless available_quota_in_bytes
+        raise StorageQuotaExceededError if
+          content_length_from(headers) > available_quota_in_bytes.to_i
+      end
+
+      def headers
+        @headers ||= Typhoeus.head(@translated_url, typhoeus_options).headers
+      end
+
+      def typhoeus_options
+        verify_ssl = http_options.fetch(:verify_ssl_cert, false)
+        {
+          cookiefile:     cookiejar,
+          cookiejar:      cookiejar,
+          followlocation: true,
+          ssl_verifypeer: verify_ssl,
+          ssl_verifyhost: (verify_ssl ? 2 : 0)
+        }
+      end
+
+      def cookiejar
+        repository.fullpath_for("#{seed}_cookiejar")
+      end
+
+      def download_and_store
+        name = ''
+        download_error = false
+        error_response = nil
+
+        temp_name = filepath(DEFAULT_FILENAME << '_' << random_name)
+
+        downloaded_file = File.open(temp_name, 'wb')
+        request = Typhoeus::Request.new(@translated_url, typhoeus_options)
+        request.on_headers do |response|
+          unless response.success?
+            download_error = true
+            error_response = response
+          end
+        end
+        request.on_body do |chunk|
+          downloaded_file.write(chunk)
+        end
+        request.on_complete do |response|
+          unless response.success?
+            download_error = true
+            error_response = response
+          end
+          downloaded_file.close
+
+          headers = response.headers
+          name            = name_from(headers, url, @custom_filename)
+          @etag           = etag_from(headers)
+          @last_modified  = last_modified_from(headers)
+        end
+        request.run
+
+        if download_error && !error_response.nil?
+          if error_response.headers['Error'] && error_response.headers['Error'] =~ /too many nodes/
+            raise TooManyNodesError.new(error_response.headers['Error'])
+          else
+            raise DownloadError.new("DOWNLOAD ERROR: Code:#{error_response.code} Body:#{error_response.body}")
+          end
+        end
+
+        File.rename(temp_name, filepath(name))
+
+        # Just return the source file structure
+        self.source_file  = SourceFile.new(filepath(name), name)
+      end
+
+      def name_from(headers, url, custom=nil)
+        name =  custom || name_from_http(headers) || name_in(url)
+        if name == nil || name == ''
+          random_name
+        else
+          name
+        end
+        name_with_extension(name, headers)
+      end
+
+      def name_with_extension(name, headers)
+        return name if content_type.nil? || content_type.empty?
+        extension = File.extname(name)
+        return name unless extension.nil? || extension.empty?
+        extension_from_content_type = content_type_extension(content_type)
+        return name if extension_from_content_type.nil?
+        "#{name}.#{extension_from_content_type}"
+      end
+
+      def content_type_extension(content_type)
+        case content_type
+        when %r{^text/plain}
+          'txt'
+        when %r{^text/csv}
+          'csv'
+        when %r{^application/vnd.ms-excel}
+          'xls'
+        when %r{^application/vnd.ms-excel.sheet.binary.macroEnabled.12}
+          'xlsb'
+        when %r{^application/vnd.openxmlformats-officedocument.spreadsheetml.sheet}
+          'xlsx'
+        when %r{^application/vnd.geo+json}
+          'geojson'
+        when %r{^application/vnd.google-earth.kml+xml}
+          'kml'
+        when %r{^application/vnd.google-earth.kmz}
+          'kmz'
+        when %r{^application/gpx+xml}
+          'gpx'
+        when %r{^application/zip}
+          'zip'
+        when %r{^application/json}
+          'json'
+        when %r{^text/javascript}
+          'json'
+        when %r{^application/javascript}
+          'json'
+        else
+          nil
+        end
+      end
+
+      def content_length_from(headers)
+        content_length = headers.fetch('Content-Length', nil)
+        content_length ||= headers.fetch('Content-length', nil)
+        content_length ||= headers.fetch('content-length', -1)
+        content_length.to_i
+      end
+
       def etag_from(headers)
         etag  =   headers.fetch('ETag', nil)
         etag  ||= headers.fetch('Etag', nil)
@@ -189,34 +264,43 @@ module CartoDB
         last_modified ||= headers.fetch('Last-modified', nil)
         last_modified ||= headers.fetch('last-modified', nil)
         last_modified = last_modified.delete('"').delete("'") if last_modified
+        if last_modified
+          begin
+            last_modified = DateTime.httpdate(last_modified)
+          rescue
+            last_modified = nil
+          end
+        end
         last_modified
       end
 
-      attr_reader   :source_file, :etag, :last_modified
-      attr_accessor :url
-
-      private
-      
-      attr_reader :http_options, :repository, :seed
-      attr_writer :source_file
+      def valid_url?
+        url =~ URL_RE
+      end
 
       def translators
         URL_TRANSLATORS.map(&:new)
-      end #translators
+      end
 
       def translate(url)
         translator = translators.find { |translator| translator.supported?(url) }
         return url unless translator
         translator.translate(url)
-      end #translated_url
+      end
 
       def filename
         [DEFAULT_FILENAME, seed].compact.join('_')
-      end #filename
+      end
 
       def filepath(name=nil)
         repository.fullpath_for(name || filename)
-      end #filepath
+      end
+
+      def content_type
+        headers.fetch('Content-Type', nil) ||
+          headers.fetch('Content-type', nil) ||
+          headers.fetch('content-type', nil)
+      end
 
       def name_from_http(headers)
         disposition = headers.fetch('Content-Disposition', nil)
@@ -226,11 +310,11 @@ module CartoDB
         filename = disposition.match(CONTENT_DISPOSITION_RE).to_a[1]
         return false unless filename
         filename.delete("'").delete('"').split(';').first
-      end #name_from_http
+      end
 
       def name_in(url)
         url.split('/').last.split('?').first
-      end #name_in
+      end
 
       def random_name
         random_generator = Random.new
@@ -239,12 +323,12 @@ module CartoDB
           name << (random_generator.rand*10).to_i.to_s
         }
         name
-      end #random_name
+      end
 
       def temporary_directory
         return @temporary_directory if @temporary_directory
         @temporary_directory = Unp.new.generate_temporary_directory.temporary_directory
-      end #temporary_directory
+      end
 
       def gdrive_deny_in?(headers)
         headers.fetch('X-Frame-Options', nil) == 'DENY'
@@ -253,7 +337,7 @@ module CartoDB
       def md5_command_for(name)
         %Q(md5sum #{name} | cut -d' ' -f1)
       end
-    end # Downloader
-  end # Importer2
-end # CartoDB
+    end
+  end
+end
 

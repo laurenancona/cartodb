@@ -8,8 +8,10 @@ require_relative './json2csv'
 require_relative './xlsx2csv'
 require_relative './xls2csv'
 require_relative './georeferencer'
+require_relative '../importer/post_import_handler'
+require_relative './geometry_fixer'
 require_relative './typecaster'
-require_relative './exceptions'
+require_relative 'importer_stats'
 
 module CartoDB
   module Importer2
@@ -35,50 +37,86 @@ module CartoDB
         self.layer          = 'track_points' if source_file.extension =~ /\.gpx/
         self.ogr2ogr        = ogr2ogr
         self.georeferencer  = georeferencer
+        self.options        = {}
+        @post_import_handler = nil
+        @importer_stats = ImporterStats.instance
       end
 
-      def run
+      def set_importer_stats(importer_stats)
+        @importer_stats = importer_stats
+      end
+
+      def run(post_import_handler_instance=nil)
+        @importer_stats.timing('loader') do
+
+          @post_import_handler = post_import_handler_instance
+
+          @importer_stats.timing('normalize') do
+            normalize
+          end
+
+          job.log "Detected encoding #{encoding}"
+          job.log "Using database connection with #{job.concealed_pg_options}"
+
+          @importer_stats.timing('ogr2ogr') do
+            run_ogr2ogr
+          end
+
+          @importer_stats.timing('post_ogr2ogr_tasks') do
+            post_ogr2ogr_tasks
+          end
+
+          self
+        end
+      end
+
+      def streamed_run_init
         normalize
         job.log "Detected encoding #{encoding}"
         job.log "Using database connection with #{job.concealed_pg_options}"
-        ogr2ogr.run
+        job.log "Running in append mode"
+        run_ogr2ogr
+      end
 
-        job.log "ogr2ogr call:      #{ogr2ogr.command}"
-        job.log "ogr2ogr output:    #{ogr2ogr.command_output}"
-        job.log "ogr2ogr exit code: #{ogr2ogr.exit_code}"
+      def streamed_run_continue(new_source_file)
+        @ogr2ogr.filepath = new_source_file.fullpath
+        run_ogr2ogr(append_mode=true)
+      end
 
-        raise InvalidGeoJSONError if ogr2ogr.command_output =~ /nrecognized GeoJSON/
-        if ogr2ogr.exit_code != 0
-          if (ogr2ogr.exit_code == 256 && ogr2ogr.command_output =~ /calloc failed/) || \
-              (ogr2ogr.exit_code == 35584 && ogr2ogr.command_output =~ /Segmentation fault/)
-            raise FileTooBigError.new(job.logger)
-          end
-          if ogr2ogr.exit_code == 256 && ogr2ogr.command_output =~ /Unable to open(.*)with the following drivers/
-            raise UnsupportedFormatError.new
-          end
-          raise LoadError.new(job.logger)
-        end
+      def streamed_run_finish(post_import_handler_instance=nil)
+        @post_import_handler = post_import_handler_instance
+
+        post_ogr2ogr_tasks
+      end
+
+      def post_ogr2ogr_tasks
+        georeferencer.mark_as_from_geojson_with_transform if post_import_handler.has_transform_geojson_geom_column?
+
         job.log 'Georeferencing...'
         georeferencer.run
         job.log 'Georeferenced'
 
-        job.log 'Typecasting...'
-        typecaster.run
-        job.log 'Typecasted'
-        self
+        if post_import_handler.has_fix_geometries_task?
+          job.log 'Fixing geometry...'
+          # At this point the_geom column is renamed
+          GeometryFixer.new(job.db, job.table_name, SCHEMA, 'the_geom', job).run
+        end
       end
 
       def normalize
         converted_filepath = normalizers_for(source_file.extension)
           .inject(source_file.fullpath) { |filepath, normalizer_klass|
-            normalizer = normalizer_klass.new(filepath, job)
 
-            FORCE_NORMALIZER_REGEX.each { |regex|
-              normalizer.force_normalize if regex =~ source_file.path
-            }
+            @importer_stats.timing(normalizer_klass.to_s.split('::').last) do
+              normalizer = normalizer_klass.new(filepath, job)
 
-            normalizer.run
-                      .converted_filepath
+              FORCE_NORMALIZER_REGEX.each { |regex|
+                normalizer.force_normalize if regex =~ source_file.path
+              }
+
+              normalizer.run
+                        .converted_filepath
+            end
           }
         layer = source_file.layer
         @source_file = SourceFile.new(converted_filepath)
@@ -88,20 +126,33 @@ module CartoDB
 
       def ogr2ogr
         @ogr2ogr ||= Ogr2ogr.new(
-          job.table_name, @source_file.fullpath, job.pg_options,
-          @source_file.layer, ogr2ogr_options
+          job.table_name, @source_file.fullpath, job.pg_options, @source_file.layer, ogr2ogr_options
         )
       end
 
       def ogr2ogr_options
-        options = { encoding: encoding }
-        if source_file.extension == '.shp'
-          options.merge!(shape_encoding: shape_encoding) 
+        ogr_options = { encoding: encoding }
+        unless options[:ogr2ogr_binary].nil?
+          ogr_options.merge!(ogr2ogr_binary: options[:ogr2ogr_binary])
         end
-        options
+        unless options[:ogr2ogr_csv_guessing].nil?
+          ogr_options.merge!(ogr2ogr_csv_guessing: options[:ogr2ogr_csv_guessing])
+        end
+        unless options[:quoted_fields_guessing].nil?
+          ogr_options.merge!(quoted_fields_guessing: options[:quoted_fields_guessing])
+        end
+
+        if source_file.extension == '.shp'
+          ogr_options.merge!(shape_encoding: shape_encoding)
+        end
+        ogr_options
       end
 
       def encoding
+        @encoding ||= encoding_guess
+      end
+
+      def encoding_guess
         normalizer = [ShpNormalizer, CsvNormalizer].find { |normalizer|
           normalizer.supported?(source_file.extension)
         }
@@ -118,7 +169,19 @@ module CartoDB
       end
 
       def georeferencer
-        @georeferencer ||= Georeferencer.new(job.db, job.table_name, SCHEMA, job, geometry_columns)
+        if @georeferencer.nil?
+          @georeferencer = Georeferencer.new(job.db, job.table_name, georeferencer_options, SCHEMA, job, geometry_columns)
+          @georeferencer.set_importer_stats(@importer_stats)
+        end
+        @georeferencer
+      end
+
+      def georeferencer_options
+        options.select { |key, value| [:guessing, :geocoder, :tracker].include? key }
+      end
+
+      def post_import_handler
+        @post_import_handler ||= PostImportHandler.new
       end
 
       def typecaster
@@ -143,13 +206,58 @@ module CartoDB
         source_file.extension =~ /\.osm/
       end
 
-      attr_accessor   :source_file
+      # Not used for now, but for compatibility with tiff_loader
+      def additional_support_tables
+        []
+      end
+
+      attr_accessor   :source_file, :options
 
       private
 
       attr_writer     :ogr2ogr, :georeferencer
       attr_accessor   :job, :layer
+
+      # @throws DuplicatedColumnError
+      # @throws InvalidGeoJSONError
+      # @throws TooManyColumnsError
+      # @throws StatementTimeoutError
+      # @throws FileTooBigError
+      # @throws LoadError
+      # @throws UnsupportedFormatError
+      def run_ogr2ogr(append_mode=false)
+        ogr2ogr.run(append_mode)
+
+        # too verbose in append mode
+        unless append_mode
+          job.log "ogr2ogr call:      #{ogr2ogr.command}"
+          job.log "ogr2ogr output:    #{ogr2ogr.command_output}"
+          job.log "ogr2ogr exit code: #{ogr2ogr.exit_code}"
+        end
+
+        raise DuplicatedColumnError.new(job.logger) if ogr2ogr.command_output[0..200] =~ /specified more than once/
+        raise InvalidGeoJSONError.new(job.logger) if ogr2ogr.command_output =~ /nrecognized GeoJSON/
+        raise TooManyColumnsError.new(job.logger) if ogr2ogr.command_output =~ /tables can have at most 1600 columns/
+        if ogr2ogr.command_output =~ /canceling statement due to statement timeout/i
+          raise StatementTimeoutError.new(ogr2ogr.command_output, ERRORS_MAP[CartoDB::Importer2::StatementTimeoutError])
+        end
+
+        if ogr2ogr.exit_code != 0
+          # OOM
+          if (ogr2ogr.exit_code == 256 && ogr2ogr.command_output =~ /calloc failed/) ||
+             (ogr2ogr.exit_code == 35072 && ogr2ogr.command_output =~ /Killed/)
+            raise FileTooBigError.new(job.logger)
+          end
+          # Could be OOM, could be wrong input
+          if ogr2ogr.exit_code == 35584 && ogr2ogr.command_output =~ /Segmentation fault/
+            raise LoadError.new(job.logger)
+          end
+          if ogr2ogr.exit_code == 256 && ogr2ogr.command_output =~ /Unable to open(.*)with the following drivers/
+            raise UnsupportedFormatError.new(job.logger)
+          end
+          raise LoadError.new(job.logger)
+        end
+      end
     end
   end
 end
-

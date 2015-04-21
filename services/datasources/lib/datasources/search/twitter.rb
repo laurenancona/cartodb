@@ -1,11 +1,11 @@
 # encoding: utf-8
 
-require 'typhoeus'
 require 'json'
 
 require_relative '../util/csv_file_dumper'
 
 require_relative '../../../../twitter-search/twitter-search'
+require_relative '../base_file_stream'
 
 module CartoDB
   module Datasources
@@ -22,7 +22,7 @@ module CartoDB
 
         MAX_CATEGORIES = 4
 
-        DEBUG_FLAG = true
+        DEBUG_FLAG = false
 
         # Used for each query page size, not as total
         FILTER_MAXRESULTS     = :maxResults
@@ -31,10 +31,13 @@ module CartoDB
         FILTER_CATEGORIES     = :categories
         FILTER_TOTAL_RESULTS  = :totalResults
 
+        USER_LIMITS_FILTER_CREDITS = :twitter_credits_limit
+
         CATEGORY_NAME_KEY  = :name
         CATEGORY_TERMS_KEY = :terms
 
         GEO_SEARCH_FILTER = 'has:geo'
+        PROFILE_GEO_SEARCH_FILTER = 'has:profile_geo'
         OR_SEARCH_FILTER  = 'OR'
 
         # Seconds to substract from current time as threshold to consider a time
@@ -57,8 +60,9 @@ module CartoDB
         # ]
         # @param user User
         # @param redis_storage Redis|nil (optional)
+        # @param user_defined_limits Hash|nil (optional)
         # @throws UninitializedError
-        def initialize(config, user, redis_storage = nil)
+        def initialize(config, user, redis_storage = nil, user_defined_limits={})
           @service_name = DATASOURCE_NAME
           @filters = Hash.new
 
@@ -68,7 +72,9 @@ module CartoDB
           raise MissingConfigurationError.new('missing password', DATASOURCE_NAME) unless config.include?('password')
           raise MissingConfigurationError.new('missing search_url', DATASOURCE_NAME) unless config.include?('search_url')
 
-          @search_api = TwitterSearch::SearchAPI.new({
+          @user_defined_limits = user_defined_limits
+
+          @search_api_config = {
             TwitterSearch::SearchAPI::CONFIG_AUTH_REQUIRED              => config['auth_required'],
             TwitterSearch::SearchAPI::CONFIG_AUTH_USERNAME              => config['username'],
             TwitterSearch::SearchAPI::CONFIG_AUTH_PASSWORD              => config['password'],
@@ -77,7 +83,8 @@ module CartoDB
             TwitterSearch::SearchAPI::CONFIG_REDIS_RL_MAX_CONCURRENCY   => config.fetch('ratelimit_concurrency', nil),
             TwitterSearch::SearchAPI::CONFIG_REDIS_RL_TTL               => config.fetch('ratelimit_ttl', nil),
             TwitterSearch::SearchAPI::CONFIG_REDIS_RL_WAIT_SECS         => config.fetch('ratelimit_wait_secs', nil)
-          }, redis_storage)
+          }
+          @redis_storage = redis_storage
 
           @json2csv_conversor = TwitterSearch::JSONToCSVConverter.new
 
@@ -96,9 +103,10 @@ module CartoDB
         # @param config {}
         # @param user User
         # @param redis_storage Redis|nil
+        # @param user_defined_limits Hash|nil
         # @return CartoDB::Datasources::Search::TwitterSearch
-        def self.get_new(config, user, redis_storage = nil)
-          return new(config, user, redis_storage)
+        def self.get_new(config, user, redis_storage = nil, user_defined_limits={})
+          return new(config, user, redis_storage, user_defined_limits)
         end
 
         # If will provide a url to download the resource, or requires calling get_resource()
@@ -121,11 +129,11 @@ module CartoDB
           unless has_enough_quota?(@user)
             raise OutOfQuotaError.new("#{@user.username} out of quota for tweets", DATASOURCE_NAME)
           end
-          raise ServiceDisabledError.new("Service disabled", DATASOURCE_NAME) unless is_service_enabled?(@user)
+          raise ServiceDisabledError.new(DATASOURCE_NAME, @user.username) unless is_service_enabled?(@user)
 
           fields_from(id)
 
-          do_search(@search_api, @filters, stream)
+          do_search(@search_api_config, @redis_storage, @filters, stream)
         end
 
         # Retrieves a resource and returns its contents
@@ -139,11 +147,11 @@ module CartoDB
           unless has_enough_quota?(@user)
             raise OutOfQuotaError.new("#{@user.username} out of quota for tweets", DATASOURCE_NAME)
           end
-          raise ServiceDisabledError.new("Service disabled", DATASOURCE_NAME) unless is_service_enabled?(@user)
+          raise ServiceDisabledError.new(DATASOURCE_NAME, @user.username) unless is_service_enabled?(@user)
 
           fields_from(id)
 
-          do_search(@search_api, @filters, stream = nil)
+          do_search(@search_api_config, @redis_storage, @filters, stream = nil)
         end
 
         # @param id string
@@ -173,21 +181,9 @@ module CartoDB
           filter_data
         end
 
-        # Log a message
-        # @param message String
-        def log(message)
-          puts message if @logger.nil?
-          @logger.append(message) unless @logger.nil?
-        end
-
-        # @param logger Mixed|nil Set or unset the logger
-        def logger=(logger=nil)
-          @logger = logger
-        end
-
         # Hide sensitive fields
         def to_s
-          "<CartoDB::Datasources::Search::Twitter @user=#{@user} @filters=#{@filters} @search_api=#{@search_api}>"
+          "<CartoDB::Datasources::Search::Twitter @user=#{@user} @filters=#{@filters} @search_api_config=#{@search_api_config}>"
         end
 
         # If this datasource accepts a data import instance
@@ -243,8 +239,21 @@ module CartoDB
         private
 
         # Used at specs
-        attr_accessor :search_api, :csv_dumper
+        attr_accessor :search_api_config, :csv_dumper
         attr_reader   :data_import_item
+
+        # Returns if the user set a maximum credits to use
+        # @return Integer
+        def twitter_credit_limits
+          @user_defined_limits.fetch(USER_LIMITS_FILTER_CREDITS, 0)
+        end
+
+        # Wraps check of specified user limit or not (to use instead his max quota)
+        # @return Integer
+        def remaining_quota
+          twitter_credit_limits > 0 ? [@user.remaining_twitter_quota, twitter_credit_limits].min
+                                    : @user.remaining_twitter_quota
+        end
 
         def table_name
           terms_fragment = @filters[FILTER_CATEGORIES].map { |category|
@@ -255,8 +264,8 @@ module CartoDB
         end
 
         def clean_category(category)
-          category.gsub(" #{OR_SEARCH_FILTER} ", ', ')
-                  .gsub(" #{GEO_SEARCH_FILTER}", '')
+          category.gsub(" (#{GEO_SEARCH_FILTER} OR #{PROFILE_GEO_SEARCH_FILTER})", '')
+                  .gsub(" #{OR_SEARCH_FILTER} ", ', ')
                   .gsub(/^\(/, '')
                   .gsub(/\)$/, '')
         end
@@ -280,18 +289,18 @@ module CartoDB
 
         # Signature must be like: .report_message('Import error', 'error', error_info: stacktrace)
         def report_error(message, additional_data)
-          if @error_report_component.nil?
-            log("Error: #{message} Additional Info: #{additional_data}")
-          else
+          log("Error: #{message} Additional Info: #{additional_data}")
+          unless @error_report_component.nil?
             @error_report_component.report_message(message, 'error', error_info: additional_data)
           end
         end
 
-        # @param api Cartodb::TwitterSearch::SearchAPI
+        # @param api_config Hash
+        # @param redis_storage Mixed
         # @param filters Hash
         # @param stream IO
         # @return Mixed The data
-        def do_search(api, filters, stream)
+        def do_search(api_config, redis_storage, filters, stream)
           threads = {}
           base_filters = filters.select { |k, v| k != FILTER_CATEGORIES }
 
@@ -311,7 +320,9 @@ module CartoDB
             sleep(0.1)
             threads[category[CATEGORY_NAME_KEY]] = Thread.new {
               # Dumps inside upon each block response
-              search_by_category(api, base_filters, category, @csv_dumper)
+              # Create new API instance for each thread to avoid sharing same value-ref
+              search_by_category(
+                TwitterSearch::SearchAPI.new(api_config, redis_storage), base_filters, category, @csv_dumper)
             }
           }
           threads.each {|key, thread|
@@ -326,10 +337,11 @@ module CartoDB
           log("Temp files:\n#{@csv_dumper.file_paths}")
           log("#{@csv_dumper.original_file_paths}\n#{@csv_dumper.headers_path}")
 
-          # Make sure we don't charge extra tweets if the user cannot go overquota
-          # (even if we "lose" charging a block or two of tweets)
-          if !@user.soft_twitter_datasource_limit && (@user.remaining_twitter_quota - @used_quota) < 0
-            @used_quota = @user.remaining_twitter_quota
+          if twitter_credit_limits > 0 || !@user.soft_twitter_datasource_limit
+            if (remaining_quota - @used_quota) < 0
+              # Make sure we don't charge extra tweets (even if we "lose" charging a block or two of tweets)
+              @used_quota = remaining_quota
+            end
           end
 
           # remaining quota is calc. on the fly based on audits/imports
@@ -338,28 +350,33 @@ module CartoDB
           streamed_size
         end
 
-        # As Ruby is pass-by-value, we can't pass user as by-ref param
         def search_by_category(api, base_filters, category, csv_dumper=nil)
           api.params = base_filters
-          api.query_param = category[CATEGORY_TERMS_KEY]
 
+          exception = nil
           next_results_cursor = nil
           total_results = 0
 
           begin
+            exception = nil
             out_of_quota = false
 
             @user_semaphore.synchronize {
-              if !@user.soft_twitter_datasource_limit && (@user.remaining_twitter_quota - @used_quota) <= 0
-                out_of_quota = true
-                next_results_cursor = nil
+              # Credit limits must be honoured above soft limit
+              if twitter_credit_limits > 0 || !@user.soft_twitter_datasource_limit
+                if remaining_quota - @used_quota <= 0
+                  out_of_quota = true
+                  next_results_cursor = nil
+                end
               end
             }
 
             unless out_of_quota
+              api.query_param = category[CATEGORY_TERMS_KEY]
               begin
                 results_page = api.fetch_results(next_results_cursor)
               rescue TwitterSearch::TwitterHTTPException => e
+                exception = e
                 report_error(e.to_s, e.backtrace)
                 # Stop gracefully to not break whole import process
                 results_page = {
@@ -367,6 +384,7 @@ module CartoDB
                     next: nil
                 }
               end
+
               dumped_items_count = csv_dumper.dump(category[CATEGORY_NAME_KEY], results_page[:results])
               next_results_cursor = results_page[:next].nil? ? nil : results_page[:next]
 
@@ -375,11 +393,36 @@ module CartoDB
               }
 
               total_results += dumped_items_count
-
             end
-          end while (!next_results_cursor.nil? && !out_of_quota)
+          end while (!next_results_cursor.nil? && !out_of_quota && !exception)
 
           log("'#{category[CATEGORY_NAME_KEY]}' got #{total_results} results")
+
+          # ogr2org fails when there's no result. Since importing is done through a file
+          # that hides metadata we must raise an error to handle it gracefully
+          raise NoResultsError.new if exception.nil? && total_results == 0
+
+          # If fails on the first request, do not fail silently
+          if !exception.nil? && total_results == 0
+            log("ERROR: 0 results & exception: #{exception} (HTTP #{exception.http_code}) #{exception.additional_data}")
+            # @see http://support.gnip.com/apis/search_api/api_reference.html
+            if exception.http_code == 422 && exception.additional_data =~ /request usage cap exceeded/i
+              raise OutOfQuotaError.new(exception.to_s, DATASOURCE_NAME)
+            end
+            if [401, 404].include?(exception.http_code)
+              raise MissingConfigurationError.new(exception.to_s, DATASOURCE_NAME)
+            end
+            if [400, 422].include?(exception.http_code)
+              raise InvalidInputDataError.new(exception.to_s, DATASOURCE_NAME)
+            end
+            if exception.http_code == 429
+              raise CartoDB::Datasources::ResponseError.new(exception.to_s, DATASOURCE_NAME)
+            end
+            if [502, 503].include?(exception.http_code)
+              raise ExternalServiceError.new(exception.to_s, DATASOURCE_NAME)
+            end
+            raise DatasourceBaseError.new(exception.to_s, DATASOURCE_NAME)
+          end
 
           total_results
         end
@@ -445,7 +488,7 @@ module CartoDB
             unless category[:terms].count == 0
               query[CATEGORY_TERMS_KEY] << '('
               query[CATEGORY_TERMS_KEY] << category[:terms].join(' OR ')
-              query[CATEGORY_TERMS_KEY] << ") #{GEO_SEARCH_FILTER}"
+              query[CATEGORY_TERMS_KEY] << ") (#{GEO_SEARCH_FILTER} OR #{PROFILE_GEO_SEARCH_FILTER})"
             end
 
             if query[CATEGORY_TERMS_KEY].length > MAX_QUERY_SIZE
@@ -470,25 +513,34 @@ module CartoDB
           }.compact
         end
 
+        # Max results per page
+        # @param user User
         def build_maxresults_field(user)
-          # user about to hit quota?
-          if user.remaining_twitter_quota < TwitterSearch::SearchAPI::MAX_PAGE_RESULTS
-            if user.soft_twitter_datasource_limit
-              # But can go beyond limits
-              TwitterSearch::SearchAPI::MAX_PAGE_RESULTS
-            else
-              user.remaining_twitter_quota
-            end
+          if twitter_credit_limits > 0
+            [remaining_quota, TwitterSearch::SearchAPI::MAX_PAGE_RESULTS].min
           else
-            TwitterSearch::SearchAPI::MAX_PAGE_RESULTS
+            # user about to hit quota?
+            if remaining_quota < TwitterSearch::SearchAPI::MAX_PAGE_RESULTS
+              if user.soft_twitter_datasource_limit
+                # But can go beyond limits
+                TwitterSearch::SearchAPI::MAX_PAGE_RESULTS
+              else
+                remaining_quota
+              end
+            else
+              TwitterSearch::SearchAPI::MAX_PAGE_RESULTS
+            end
           end
         end
 
+
+        # Max total results
+        # @param user User
         def build_total_results_field(user)
-          if user.soft_twitter_datasource_limit
+          if twitter_credit_limits == 0 && user.soft_twitter_datasource_limit
             NO_TOTAL_RESULTS
           else
-            user.remaining_twitter_quota
+            remaining_quota
           end
         end
 
@@ -510,6 +562,7 @@ module CartoDB
         # @param user User
         # @return boolean
         def has_enough_quota?(user)
+          # As this is used to disallow searches (and throw exceptions) don't use here user limits
           user.soft_twitter_datasource_limit || (user.remaining_twitter_quota > 0)
         end
 

@@ -28,6 +28,12 @@ module CartoDB
 
   class TableError < StandardError; end
 
+  class InvalidInterval < StandardError
+    def detail
+      Cartodb.error_codes[:invalid_interval]
+    end
+  end
+
   # importer errors
   class EmptyFile < StandardError
     def detail
@@ -125,6 +131,22 @@ module CartoDB
 
   class NonConvertibleData < StandardError; end
 
-  class CentralCommunicationFailure < StandardError; end
+  class CentralCommunicationFailure < StandardError
+
+    attr_accessor :message, :response_code, :errors
+
+    def initialize(response)
+      @message = "Application server responded with http #{response.code}: #{response.body}"
+      @response_code = response.code
+      @errors = JSON.parse(response.body)['errors']
+    rescue
+      @errors = ['Couldn\'t parse response errors.']
+    end
+
+    def user_message
+      "There was a problem with authentication server. #{@errors.join(' ; ')}"
+    end
+
+  end
 
 end

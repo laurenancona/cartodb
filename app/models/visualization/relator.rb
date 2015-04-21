@@ -1,6 +1,10 @@
 # encoding: utf-8
 require_relative './stats'
+require_relative '../visualization/collection'
 require_relative '../overlay/collection'
+require_relative './support_tables'
+require_relative '../map'
+require_relative '../layer'
 
 module CartoDB
   module Visualization
@@ -12,42 +16,85 @@ module CartoDB
                         others:           :other_layers
                       }
 
-      INTERFACE     = %w{ overlays map user table related_tables layers stats
-                      single_data_layer? synchronization permission }
+      INTERFACE     = %w{ overlays map user table related_tables layers stats mapviews single_data_layer? synchronization
+                          permission parent children support_tables prev_list_item next_list_item likes likes_count reload_likes }
 
       def initialize(attributes={})
         @id             = attributes.fetch(:id)
         @map_id         = attributes.fetch(:map_id)
         @user_id        = attributes.fetch(:user_id)
         @permission_id  = attributes.fetch(:permission_id)
-      end #initialize
+        @parent_id      = attributes.fetch(:parent_id)
+        @kind           = attributes.fetch(:kind)
+        @support_tables = nil
+        @likes          = nil
+        @prev_id        = attributes.fetch(:prev_id)
+        @next_id        = attributes.fetch(:next_id)
+      end
+
+      # @return []
+      def children
+        ordered = []
+        children = Visualization::Collection.new.fetch(parent_id: @id)
+        if children.count > 0
+          ordered << children.select { |vis| vis[:prev_id].nil? }.first
+          children.delete_if { |vis| vis[:prev_id].nil? }
+          while children.count > 0 && !ordered.last[:next_id].nil?
+            target = ordered.last[:next_id]
+            ordered << children.select { |vis| vis[:id] == target }.first
+            children.delete_if { |vis| vis[:id] == target }
+          end
+        end
+        ordered
+      end
+
+      # @return CartoDB::Visualization::Member
+      def parent
+        @parent ||= Visualization::Member.new(id: @parent_id).fetch unless @parent_id.nil?
+      end
+
+      # @return CartoDB::Visualization::Member
+      def prev_list_item
+        @prev_vis ||= Visualization::Member.new(id: @prev_id).fetch unless @prev_id.nil?
+      end
+
+      # @return CartoDB::Visualization::Member
+      def next_list_item
+         @next_vis ||= Visualization::Member.new(id: @next_id).fetch unless @next_id.nil?
+      end
+
+      def support_tables
+        @support_tables ||= Visualization::SupportTables.new(user.in_database,
+                                     { parent_id: @id, parent_kind: @kind, public_user_roles: user.public_user_roles})
+      end
 
       def overlays
         @overlays ||= Overlay::Collection.new(visualization_id: id).fetch
-      end #overlays
+      end
 
       def map
         @map ||= ::Map.where(id: map_id).first
-      end #map
+      end
 
       def user
-        @user ||= User.where(id: @user_id).first unless @user_id.nil?
-      end #user
+        @user ||= User[@user_id] unless @user_id.nil?
+      end
 
       def table
         return nil unless defined?(::Table)
-        @table ||= ::Table.where(map_id: map_id).first 
-      end #table
+        return nil if map_id.nil?
+        @table ||= ::UserTable.from_map_id(map_id).try(:service)
+      end
 
       def related_tables
         @related_tables ||= layers(:carto_and_torque)
-          .flat_map(&:affected_tables).uniq
-      end #related_tables
+          .flat_map{|layer| layer.affected_tables.map{|t| t.service}}.uniq
+      end
 
       def layers(kind)
         return [] unless map
         map.send(LAYER_SCOPES.fetch(kind))
-      end #layers
+      end
 
       def synchronization
         return {} unless table
@@ -56,7 +103,11 @@ module CartoDB
 
       def stats(user=nil)
         @stats ||= Visualization::Stats.new(self, user).to_poro
-      end #stats
+      end
+
+      def mapviews(user=nil)
+        @mapviews ||= stats(user).collect { |o| o[1] }.reduce(:+)
+      end
 
       def single_data_layer?
         layers(:cartodb).to_a.length == 1 || related_tables.length == 1
@@ -66,7 +117,26 @@ module CartoDB
         @permission ||= CartoDB::Permission.where(id: @permission_id).first unless @permission_id.nil?
       end
 
+      def likes
+        @likes ||= likes_search.all.to_a
+      end
+
+      def likes_count
+        @likes_count ||= likes_search.count
+      end
+
+      def reload_likes
+        @likes = nil
+        likes
+      end
+
       attr_reader :id, :map_id
+
+      private
+
+      def likes_search
+        Like.where(subject: @id)
+      end
     end
   end
 end

@@ -1,11 +1,17 @@
 #encoding: UTF-8
 
 require_relative '../../../../services/datasources/lib/datasources'
+require_relative '../../../models/visualization/external_source'
+require_relative '../../../../services/platform-limits/platform_limits'
+require_relative '../../../../services/importer/lib/importer/exceptions'
 
 class Api::Json::ImportsController < Api::ApplicationController
+
+  include FileUploadHelper
+
   ssl_required :index, :show, :create
-  ssl_allowed :service_token_valid?, :list_files_for_service, :get_service_auth_url, :validate_service_oauth_code, \
-                :invalidate_service_token, :service_oauth_callback
+  ssl_allowed :service_token_valid?, :list_files_for_service, :get_service_auth_url, :validate_service_oauth_code,
+              :invalidate_service_token, :service_oauth_callback
   respond_to :html, only: [:get_service_auth_url]
 
   # NOTE: When/If OAuth tokens management is built into the UI, remove this to send and check CSRF
@@ -21,45 +27,84 @@ class Api::Json::ImportsController < Api::ApplicationController
   end
 
   def show
+    begin
+      UUIDTools::UUID.parse(params[:id])
+    rescue ArgumentError
+      render_404 and return
+    end
+
     data_import = DataImport[params[:id]]
+    render_404 and return if data_import.nil?
+
     data_import.mark_as_failed_if_stuck!
 
-    data = data_import.reload.public_values.except('service_item_id', 'service_name')
-    if data_import.state == DataImport::STATE_SUCCESS && \
-       data_import.service_name == CartoDB::Datasources::Search::Twitter::DATASOURCE_NAME
+    data = data_import.reload.api_public_values
+    if data_import.state == DataImport::STATE_COMPLETE
+      data[:any_table_raster] = data_import.is_raster?
 
-      audit_entry = ::SearchTweet.where(data_import_id: data_import.id).first
-
-      data[:tweets_georeferenced] = audit_entry.retrieved_items
-      data[:tweets_cost] = audit_entry.price
-      data[:tweets_overquota] = audit_entry.user.remaining_twitter_quota == 0
+      decorate_twitter_import_data!(data, data_import)
+      decorate_default_visualization_data!(data, data_import)
     end
 
     render json: data
   end
 
   def create
-    file_uri = params[:url].present? ? params[:url] : _upload_file
+    external_source = nil
 
-    service_name = params[:service_name].present? ? params[:service_name] : CartoDB::Datasources::Url::PublicUrl::DATASOURCE_NAME
-    service_item_id = params[:service_item_id].present? ? params[:service_item_id] : params[:url].presence
+    concurrent_import_limit =
+      CartoDB::PlatformLimits::Importer::UserConcurrentImportsAmount.new({
+                                                                           user: current_user,
+                                                                           redis: {
+                                                                             db: $users_metadata
+                                                                           }
+                                                                         })
+    if concurrent_import_limit.is_over_limit!
+      raise CartoDB::Importer2::UserConcurrentImportsLimitError.new
+    end
 
-    options = {
-        user_id:          current_user.id,
-        table_name:       params[:table_name].presence,
-        data_source:      file_uri.presence,
-        table_id:         params[:table_id].presence,
-        append:           (params[:append].presence == 'true'),
-        table_copy:       params[:table_copy].presence,
-        from_query:       params[:sql].presence,
-        service_name:     service_name.presence,
-        service_item_id:  service_item_id.presence
-    }
+    options = default_creation_options
 
-    data_import = DataImport.create(options)
-    Resque.enqueue(Resque::ImporterJobs, job_id: data_import.id)
+    if params[:url].present?
+      options.merge!({
+                       data_source: params.fetch(:url)
+                     })
+    elsif params[:remote_visualization_id].present?
+      external_source = external_source(params[:remote_visualization_id])
+      options.merge!( { data_source: external_source.import_url.presence } )
+    else
+      results = upload_file_to_storage(params, request, Cartodb.config[:importer]['s3'])
+      options.merge!({
+                        data_source: results[:file_uri].presence,
+                        # Not queued import is set by skipping pending state and setting directly as already enqueued
+                        state: results[:enqueue] ? DataImport::STATE_PENDING : DataImport::STATE_ENQUEUED
+                     })
+    end
+
+    data_import = DataImport.create(options.merge!({
+                                                     # override param to store as string
+                                                     user_defined_limits: ::JSON.dump(options[:user_defined_limits])
+                                                   }))
+
+    if external_source.present?
+      ExternalDataImport.new(data_import.id, external_source.id).save
+    end
+
+    Resque.enqueue(Resque::ImporterJobs, job_id: data_import.id) if options[:state] == DataImport::STATE_PENDING
 
     render_jsonp({ item_queue_id: data_import.id, success: true })
+  rescue CartoDB::Importer2::UserConcurrentImportsLimitError
+    rl_value = decrement_concurrent_imports_rate_limit
+    render_jsonp({
+                   errors: {
+                              imports: "We're sorry but you're already using your allowed #{rl_value} import slots"
+                           }
+                 }, 429)
+  rescue => ex
+    decrement_concurrent_imports_rate_limit
+
+    CartoDB::Logger.info('Error: create', "#{ex.message} #{ex.backtrace.inspect}")
+    render_jsonp({ errors: { imports: ex.message } }, 400)
   end
 
   # ----------- Import OAuths Management -----------
@@ -104,7 +149,7 @@ class Api::Json::ImportsController < Api::ApplicationController
     end
     CartoDB::Logger.info('Error: service_token_valid?', "#{ex.message} #{ex.backtrace.inspect}")
     render_jsonp({ errors: { imports: ex.message } }, 400)
-  end #service_token_valid?
+  end
 
   def list_files_for_service
     # @see CartoDB::Datasources::Base::FORMAT_xxxx constants
@@ -124,13 +169,14 @@ class Api::Json::ImportsController < Api::ApplicationController
   rescue => ex
     CartoDB::Logger.info('Error: list_files_for_service', "#{ex.message} #{ex.backtrace.inspect}")
     render_jsonp({ errors: { imports: ex.message } }, 400)
-  end #list_files_for_service
+  end
 
   def get_service_auth_url
     oauth = current_user.oauths.select(params[:id])
     raise CartoDB::Datasources::AuthError.new("OAuth already set for service #{params[:id]}") unless oauth.nil?
 
-    datasource = CartoDB::Datasources::DatasourcesFactory.get_datasource(params[:id], current_user, $tables_metadata)
+    datasource = CartoDB::Datasources::DatasourcesFactory.get_datasource(
+      params[:id], current_user, { redis_storage: $tables_metadata })
     raise CartoDB::Datasources::AuthError.new("Couldn't fetch datasource for service #{params[:id]}") if datasource.nil?
     unless datasource.kind_of? CartoDB::Datasources::BaseOAuth
       raise CartoDB::Datasources::InvalidServiceError.new("Datasource #{params[:id]} does not support OAuth")
@@ -146,7 +192,7 @@ class Api::Json::ImportsController < Api::ApplicationController
   rescue => ex
     CartoDB::Logger.info('Error: get_service_auth_url', "#{ex.message} #{ex.backtrace.inspect}")
     render_jsonp({ errors: { imports: ex.message } }, 400)
-  end #get_service_auth_url
+  end
 
   # Only of use if service is set to work in authorization code mode. Ignore for callback-based oauths
   def validate_service_oauth_code
@@ -155,7 +201,8 @@ class Api::Json::ImportsController < Api::ApplicationController
     oauth = current_user.oauths.select(params[:id])
     raise CartoDB::Datasources::AuthError.new("OAuth already set for service #{params[:id]}") unless oauth.nil?
 
-    datasource = CartoDB::Datasources::DatasourcesFactory.get_datasource(params[:id], current_user, $tables_metadata)
+    datasource = CartoDB::Datasources::DatasourcesFactory.get_datasource(
+      params[:id], current_user, { redis_storage: $tables_metadata })
     raise CartoDB::Datasources::AuthError.new("Couldn't fetch datasource for service #{params[:id]}") if datasource.nil?
     unless datasource.kind_of? CartoDB::Datasources::BaseOAuth
       raise CartoDB::Datasources::InvalidServiceError.new("Datasource #{params[:id]} does not support OAuth")
@@ -179,7 +226,7 @@ class Api::Json::ImportsController < Api::ApplicationController
   rescue => ex
     CartoDB::Logger.info('Error: validate_service_oauth_code', "#{ex.message} #{ex.backtrace.inspect}")
     render_jsonp({ errors: { imports: ex.message } }, 400)
-  end #validate_service_oauth_code
+  end
 
   def invalidate_service_token
     oauth = current_user.oauths.select(params[:id])
@@ -200,13 +247,14 @@ class Api::Json::ImportsController < Api::ApplicationController
   rescue => ex
     CartoDB::Logger.info('Error: invalidate_service_token', "#{ex.message} #{ex.backtrace.inspect}")
     render_jsonp({ errors: { imports: ex.message } }, 400)
-  end #invalidate_service_token
+  end
 
   def service_oauth_callback
     oauth = current_user.oauths.select(params[:id])
     raise CartoDB::Datasources::AuthError.new("OAuth already set for service #{params[:id]}") unless oauth.nil?
 
-    datasource = CartoDB::Datasources::DatasourcesFactory.get_datasource(params[:id], current_user, $tables_metadata)
+    datasource = CartoDB::Datasources::DatasourcesFactory.get_datasource(
+      params[:id], current_user, { redis_storage: $tables_metadata })
     raise CartoDB::Datasources::AuthError.new("Couldn't fetch datasource for service #{params[:id]}") if datasource.nil?
     unless datasource.kind_of? CartoDB::Datasources::BaseOAuth
       raise CartoDB::Datasources::InvalidServiceError.new("Datasource #{params[:id]} does not support OAuth")
@@ -225,62 +273,84 @@ class Api::Json::ImportsController < Api::ApplicationController
   rescue => ex
     CartoDB::Logger.info('Error: service_oauth_callback', "#{ex.message} #{ex.backtrace.inspect}")
     render_jsonp({ errors: { imports: ex.message } }, 400)
-  end #service_oauth_callback
-
-  protected
-
-  def synchronous_import?
-    params[:synchronous].present?
   end
 
-  def _upload_file
-    case
-    when params[:filename].present? && request.body.present?
-      filename = params[:filename].original_filename rescue params[:filename].to_s
-      filepath = params[:filename].path rescue ''
-    when params[:file].present?
-      filename = params[:file].original_filename rescue params[:file].to_s
-      filepath = params[:file].path rescue ''
-    else
-      return
+  private
+
+  def default_creation_options
+    user_defined_limits = params.fetch(:user_defined_limits, {})
+    # Sanitize
+    user_defined_limits[:twitter_credits_limit] =
+        user_defined_limits[:twitter_credits_limit].presence.nil? ? 0 : user_defined_limits[:twitter_credits_limit].to_i
+
+    # Already had an internal issue due to forgetting to send always a string (e.g. for Twitter is an stringified JSON)
+    raise "service_item_id field should be empty or a string" unless (params[:service_item_id].is_a?(String) ||
+                                                                      params[:service_item_id].is_a?(NilClass))
+
+    # Keep in sync with http://docs.cartodb.com/cartodb-platform/import-api.html#params
+    {
+      user_id:                current_user.id,
+      table_name:             params[:table_name].presence,
+      # Careful as this field has rules (@see DataImport data_source=)
+      data_source:            nil,
+      table_id:               params[:table_id].presence,
+      append:                 (params[:append].presence == 'true'),
+      table_copy:             params[:table_copy].presence,
+      from_query:             params[:sql].presence,
+      service_name:           params[:service_name].present? ? params[:service_name] : CartoDB::Datasources::Url::PublicUrl::DATASOURCE_NAME,
+      service_item_id:        params[:service_item_id].present? ? params[:service_item_id] : params[:url].presence,
+      type_guessing:          !["false", false].include?(params[:type_guessing]),
+      quoted_fields_guessing: !["false", false].include?(params[:quoted_fields_guessing]),
+      content_guessing:       ["true", true].include?(params[:content_guessing]),
+      state:                  DataImport::STATE_PENDING,  # Pending == enqueue the task
+      upload_host:            Socket.gethostname,
+      create_visualization:   ["true", true].include?(params[:create_vis]),
+      user_defined_limits:    user_defined_limits
+    }
+  end
+
+  def decorate_twitter_import_data!(data, data_import)
+    return if data_import.service_name != CartoDB::Datasources::Search::Twitter::DATASOURCE_NAME
+
+    audit_entry = ::SearchTweet.where(data_import_id: data_import.id).first
+    data[:tweets_georeferenced] = audit_entry.retrieved_items
+    data[:tweets_cost] = audit_entry.price
+    data[:tweets_overquota] = audit_entry.user.remaining_twitter_quota == 0
+  end
+
+  def decorate_default_visualization_data!(data, data_import)
+    derived_vis_id = nil
+
+    if data_import.create_visualization && !data_import.visualization_id.nil?
+      derived_vis_id = CartoDB::Visualization::Member.new(id: data_import.visualization_id).fetch.id
     end
 
-    random_token = Digest::SHA2.hexdigest("#{Time.now.utc}--#{filename.object_id.to_s}").first(20)
+    data[:derived_visualization_id] = derived_vis_id
+  end
 
-    s3_config = Cartodb.config[:importer]['s3']
+  def external_source(remote_visualization_id)
+    external_source = CartoDB::Visualization::ExternalSource.where(visualization_id: remote_visualization_id).first
+    raise CartoDB::Datasources::AuthError.new('Illegal external load') unless remote_visualization_id.present? && external_source.importable_by(current_user)
+    external_source
+  end
 
-    if s3_config && s3_config['access_key_id'] && s3_config['secret_access_key']
-      AWS.config(
-        access_key_id: Cartodb.config[:importer]['s3']['access_key_id'],
-        secret_access_key: Cartodb.config[:importer]['s3']['secret_access_key']
-      )
-      s3 = AWS::S3.new
-      s3_bucket = s3.buckets[s3_config['bucket_name']]
-
-      path = "#{random_token}/#{File.basename(filename)}"
-      o = s3_bucket.objects[path]
-
-      o.write(Pathname.new(filepath), { acl: :authenticated_read })
-
-      o.url_for(:get, expires: s3_config['url_ttl']).to_s
-    else
-      case
-        when params[:filename].present? && request.body.present?
-          filedata = params[:filename].read.force_encoding('utf-8') rescue request.body.read.force_encoding('utf-8')
-        when params[:file].present?
-          filedata = params[:file].read.force_encoding('utf-8')
-        else
-          return
-      end
-
-      FileUtils.mkdir_p(Rails.root.join('public/uploads').join(random_token))
-
-      file = File.new(Rails.root.join('public/uploads').join(random_token).join(File.basename(filename)), 'w')
-      file.write filedata
-      file.close
-      # Force GC pass to avoid stale memory
-      filedata = nil
-      file.path[/(\/uploads\/.*)/, 1]
+  def decrement_concurrent_imports_rate_limit
+    begin
+      concurrent_import_limit =
+        CartoDB::PlatformLimits::Importer::UserConcurrentImportsAmount.new({
+                                                                             user: current_user,
+                                                                             redis: {
+                                                                               db: $users_metadata
+                                                                             }
+                                                                           })
+      # It's ok to decrease always as if over limit, will get just at limit and next try again go overlimit
+      concurrent_import_limit.decrement
+      concurrent_import_limit.peek  # return limit value
+    rescue => sub_exception
+      CartoDB::Logger.info('Error decreasing concurrent import limit',
+                           "#{sub_exception.message} #{sub_exception.backtrace.inspect}")
+      nil
     end
   end
+
 end

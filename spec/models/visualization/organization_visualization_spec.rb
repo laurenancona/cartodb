@@ -29,7 +29,7 @@ describe Visualization::Member do
     UserOrganization.any_instance.stubs(:move_user_tables_to_schema).returns(nil)
     CartoDB::TablePrivacyManager.any_instance.stubs(
         :set_from_table_privacy => nil,
-        :propagate_to_redis_and_varnish => nil
+        :propagate_to_varnish => nil
     )
 
     User.any_instance.stubs(
@@ -47,7 +47,8 @@ describe Visualization::Member do
         :cartodb_extension_version_pre_mu? => false,
         :rebuild_quota_trigger => nil,
         :setup_schema => nil,
-        :grant_publicuser_in_database => nil
+        :grant_publicuser_in_database => nil,
+        :move_tables_to_schema => nil
     )
 
     Organization.all.each { |org|
@@ -83,7 +84,8 @@ describe Visualization::Member do
         :get_table_id => 1,
         :grant_select_to_tiler_user => nil,
         :cartodbfy => nil,
-        :set_the_geom_column! => nil
+        :set_the_geom_column! => nil,
+        :is_raster? => false
     )
   end
 
@@ -160,7 +162,7 @@ describe Visualization::Member do
     vis = Visualization::Member.new(
         name:     'wadus_vis',
         map_id:   map.id,
-        type:     Visualization::Member::DERIVED_TYPE,
+        type:     Visualization::Member::TYPE_DERIVED,
         privacy:  blender.blended_privacy,
         user_id:  user.id
     )
@@ -185,7 +187,7 @@ describe Visualization::Member do
     table.reload
 
     # table = create_table(user_id: user.id, name: 'wadus_table')
-    table.table_visualization.type.should eq Visualization::Member::CANONICAL_TYPE
+    table.table_visualization.type.should eq Visualization::Member::TYPE_CANONICAL
 
     table
   end

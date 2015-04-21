@@ -7,6 +7,9 @@ require 'rspec/rails'
 # in spec/support/ and its subdirectories.
 Dir[Rails.root.join('spec/support/**/*.rb')].each {|f| require f}
 
+# Inline Resque for queue handling
+Resque.inline = true
+
 RSpec.configure do |config|
   config.mock_with :mocha
 
@@ -15,10 +18,6 @@ RSpec.configure do |config|
 
   config.before(:suite) do
     CartoDB::RedisTest.up
-  end
-
-  config.before(:each) do
-    Table.any_instance.stubs(:tile_request).returns true
   end
 
   config.before(:all) do
@@ -61,4 +60,21 @@ RSpec.configure do |config|
     CartoDB::RedisTest.down
   end
 
+  module Rack
+    module Test
+      module Methods
+        def build_rack_mock_session
+          Rack::MockSession.new(app, host)
+        end
+
+        def with_host(temp_host)
+          old_host = host
+          host! temp_host
+          yield
+        ensure
+          host! old_host
+        end
+      end
+    end
+  end
 end

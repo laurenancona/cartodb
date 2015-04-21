@@ -41,7 +41,8 @@ module CartoDB
       user.password              = attributes[:password] || user.email.split('@').first
       user.password_confirmation = user.password
       user.admin                 = attributes[:admin] == false ? false : true
-      user.private_tables_enabled= attributes[:private_tables_enabled] == false ? false : true
+      user.private_tables_enabled = attributes[:private_tables_enabled] == false ? false : true
+      user.private_maps_enabled  = attributes[:private_maps_enabled] == true ? true : false
       user.enabled               = attributes[:enabled] == false ? false : true
       user.table_quota           = attributes[:table_quota]     if attributes[:table_quota]
       user.quota_in_bytes        = attributes[:quota_in_bytes]  if attributes[:quota_in_bytes]
@@ -57,6 +58,7 @@ module CartoDB
       user.organization          = attributes[:organization] || nil
       user.twitter_datasource_enabled = attributes[:twitter_datasource_enabled] || false
       user.avatar_url            = user.default_avatar
+      user.dynamic_cdn_enabled   = attributes[:dynamic_cdn_enabled] || false
 
       user
     end
@@ -77,17 +79,13 @@ module CartoDB
       user.save
     end
 
-    def reload_user_data user
-
+    def reload_user_data(user)
       delete_user_data user
-
-      fixture     = "#{Rails.root}/db/fake_data/import_csv_1.csv"
-      data_import = create_import(@user, fixture)
-      fixture     = "#{Rails.root}/db/fake_data/twitters.csv"
-      data_import = create_import(@user, fixture)
+      create_import(@user, "#{Rails.root}/db/fake_data/import_csv_1.csv")
+      create_import(@user, "#{Rails.root}/db/fake_data/twitters.csv")
     end
 
-    def create_import user, file_name, name=nil
+    def create_import(user, file_name, name=nil)
       data_import  = DataImport.create(
         user_id:      user.id,
         data_source:  file_name,
@@ -110,6 +108,9 @@ module CartoDB
       user.assets_dataset.destroy
       user.data_imports_dataset.destroy
       user.geocodings_dataset.destroy
+      CartoDB::Visualization::Collection.new.fetch(user_id: user.id).each { |v|
+        v.delete
+      }
     end
 
     def load_user_functions(user)

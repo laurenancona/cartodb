@@ -17,19 +17,19 @@ describe Admin::TablesController do
     @user = create_user(
       username: 'test',
       email:    'test@test.com',
-      password: 'test'
+      password: 'test12'
     )
     @api_key = @user.api_key
   end
 
   before(:each) do
     CartoDB::Varnish.any_instance.stubs(:send_command).returns(true)
-    @db = Sequel.sqlite
+    @db = Rails::Sequel.connection
     delete_user_data @user
     @headers = { 
       'CONTENT_TYPE'  => 'application/json',
-      'HTTP_HOST'     => 'test.localhost.lan'
     }
+    host! 'test.localhost.lan'
   end
 
   after(:all) do

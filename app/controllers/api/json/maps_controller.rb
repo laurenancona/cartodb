@@ -38,6 +38,7 @@ class Api::Json::MapsController < Api::ApplicationController
         :stack => @map.errors.full_messages}, 400)
     end
   rescue CartoDB::NamedMapsWrapper::HTTPResponseError => exception
+    CartoDB::Logger.info "Communication error with tiler API. HTTP Code: #{exception.message}", exception.template_data
     render_jsonp({ errors: { named_maps_api: "Communication error with tiler API. HTTP Code: #{exception.message}" } }, 400)
   rescue CartoDB::NamedMapsWrapper::NamedMapDataError => exception
     render_jsonp({ errors: { named_map: exception } }, 400)
@@ -49,6 +50,7 @@ class Api::Json::MapsController < Api::ApplicationController
     @map.destroy
     head :no_content
   rescue CartoDB::NamedMapsWrapper::HTTPResponseError => exception
+    CartoDB::Logger.info "Communication error with tiler API. HTTP Code: #{exception.message}", exception.template_data
     render_jsonp({ errors: { named_maps_api: "Communication error with tiler API. HTTP Code: #{exception.message}" } }, 400)
   rescue CartoDB::NamedMapsWrapper::NamedMapDataError => exception
     render_jsonp({ errors: { named_map: exception } }, 400)
@@ -61,8 +63,9 @@ class Api::Json::MapsController < Api::ApplicationController
   def load_map
     # User must be owner or have permissions for the map's visualization
     vis = CartoDB::Visualization::Collection.new.fetch(
-        user_id: current_user.id,
-        map_id: params[:id]
+        user_id:        current_user.id,
+        map_id:         params[:id],
+        exclude_raster: true
     )
     raise RecordNotFound if vis.nil?
 

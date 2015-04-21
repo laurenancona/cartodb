@@ -13,46 +13,48 @@ module CartoDB
       affected_visualizations
       synchronization
       serialize_synchronization
+      row_count_and_size
     }
 
     def initialize(db, table)
       @db     = db
       @table  = table
-    end #initialize
+    end
 
     def table_visualization
       @table_visualization ||= Visualization::Collection.new.fetch(
         map_id: @table.map_id,
-        type:   Visualization::Member::CANONICAL_TYPE
+        type:   Visualization::Member::TYPE_CANONICAL
       ).first
-    end #table_visualization
+    end
 
     def serialize_dependent_visualizations
       dependent_visualizations.map { |object| preview_for(object) }
-    end #serialize_dependent_visualizations
+    end
 
     def serialize_non_dependent_visualizations
       non_dependent_visualizations.map { |object| preview_for(object) }
-    end #serialize_non_dependent_visualizations
+    end
 
     def dependent_visualizations
       affected_visualizations.select(&:dependent?)
-    end #dependent_visualizations
+    end
 
     def non_dependent_visualizations
       affected_visualizations.select(&:non_dependent?)
-    end #non_dependent_visualizations
+    end
 
     def affected_visualizations
       affected_visualization_records.to_a
         .uniq { |attributes| attributes.fetch(:id) }
         .map  { |attributes| Visualization::Member.new(attributes) }
-    end #affected_visualizations
+    end
 
     def preview_for(object)
       data = {
-          id:   object.id,
-          name: object.name
+        id:         object.id,
+        name:       object.name,
+        updated_at: object.updated_at
       }
       if object[:permission_id].present? && !object.permission.nil?
         data[:permission] = object.permission.to_poro.select {|key, val|
@@ -71,6 +73,10 @@ module CartoDB
       (synchronization || {}).to_hash
     end
 
+    def row_count_and_size
+      @table.row_count_and_size
+    end
+
     private
 
     attr_reader :db, :table
@@ -83,7 +89,7 @@ module CartoDB
         AND     layers_user_tables.layer_id = layers_maps.layer_id
         AND     layers_maps.map_id = visualizations.map_id
       })
-    end #affected_visualization_records
+    end
 
     def synchronization_record
       @syncronization_record ||= db[:synchronizations].with_sql(%Q{

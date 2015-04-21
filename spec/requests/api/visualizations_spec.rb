@@ -12,8 +12,12 @@ require_relative '../../../app/models/overlay/migrator'
 
 def app
   CartoDB::Application.new
-end #app
+end
 
+# INFO: THIS TEST SUITE SHOULD NOT GET NEW TESTS. In order to test visualization controller
+# add the specs to ./spec/requests/api/json/visualizations_controller_shared_examples.rb instead.
+# You can then run it with ./spec/requests/api/json/visualizations_controller_specs.rb and
+# ./spec/requests/carto/api/visualizations_controller_specs.rb.
 describe Api::Json::VisualizationsController do
   include Rack::Test::Methods
   include DataRepository
@@ -23,7 +27,8 @@ describe Api::Json::VisualizationsController do
     @user = create_user(
       username: 'test',
       email:    'client@example.com',
-      password: 'clientex'
+      password: 'clientex',
+      private_tables_enabled: 'true'
     )
     @api_key = @user.api_key
   end
@@ -33,16 +38,20 @@ describe Api::Json::VisualizationsController do
     @db = Rails::Sequel.connection
     Sequel.extension(:pagination)
 
-    CartoDB::Visualization.repository  = 
-      DataRepository::Backend::Sequel.new(@db, :visualizations)
-    CartoDB::Overlay.repository        =
-      DataRepository::Backend::Sequel.new(@db, :overlays)
+    CartoDB::Visualization.repository = DataRepository::Backend::Sequel.new(@db, :visualizations)
+    CartoDB::Overlay.repository       = DataRepository::Backend::Sequel.new(@db, :overlays)
 
-    delete_user_data @user
+    begin
+      delete_user_data @user
+    rescue => exception
+      # Silence named maps problems only here upon data cleaning, not in specs
+      raise unless exception.class.to_s == 'CartoDB::NamedMapsWrapper::HTTPResponseError'
+    end
+
     @headers = { 
       'CONTENT_TYPE'  => 'application/json',
-      'HTTP_HOST'     => 'test.localhost.lan'
     }
+    host! 'test.localhost.lan'
   end
 
   after(:all) do
@@ -210,166 +219,6 @@ describe Api::Json::VisualizationsController do
       response.fetch('name').should =~ /#{visualization_name} 0/
     end
   end # POST /api/v1/viz
-
-  describe 'GET /api/v1/viz' do
-    it 'retrieves a collection of visualizations' do
-      pending
-      payload = factory
-      post "/api/v1/viz?api_key=#{@api_key}", 
-        payload.to_json, @headers
-      id = JSON.parse(last_response.body).fetch('id')
-      
-      get "/api/v1/viz?api_key=#{@api_key}",
-        {}, @headers
-
-      response    = JSON.parse(last_response.body)
-      collection  = response.fetch('visualizations')
-      collection.first.fetch('id').should == id
-    end
-
-    it 'is updated after creating a visualization' do
-      pending
-      payload = factory
-      post "/api/v1/viz?api_key=#{@api_key}", 
-        payload.to_json, @headers
-
-      get "/api/v1/viz?api_key=#{@api_key}",
-        {}, @headers
-
-      response    = JSON.parse(last_response.body)
-      collection  = response.fetch('visualizations')
-      collection.size.should == 1
-
-      payload = factory.merge('name' => 'another one')
-      post "/api/v1/viz?api_key=#{@api_key}",
-        payload.to_json, @headers
-
-      get "/api/v1/viz?api_key=#{@api_key}",
-        {}, @headers
-      response    = JSON.parse(last_response.body)
-      collection  = response.fetch('visualizations')
-      collection.size.should == 2
-    end
-
-    it 'is updated after deleting a visualization' do
-      pending
-      payload = factory
-      post "/api/v1/viz?api_key=#{@api_key}",
-        payload.to_json, @headers
-      id = JSON.parse(last_response.body).fetch('id')
-      
-      get "/api/v1/viz?api_key=#{@api_key}",
-        {}, @headers
-      response    = JSON.parse(last_response.body)
-      collection  = response.fetch('visualizations')
-      collection.should_not be_empty
-
-      delete "/api/v1/viz/#{id}?api_key=#{@api_key}",
-        {}, @headers
-      get "/api/v1/viz?api_key=#{@api_key}",
-        {}, @headers
-
-      response    = JSON.parse(last_response.body)
-      collection  = response.fetch('visualizations')
-      collection.should be_empty
-    end
-
-    it 'paginates results' do
-      pending
-      per_page      = 10
-      total_entries = 20
-
-      total_entries.times do 
-        post "/api/v1/viz?api_key=#{@api_key}",
-          factory.to_json, @headers
-      end
-
-      get "/api/v1/viz?api_key=#{@api_key}&page=1&per_page=#{per_page}", {}, @headers
-
-      last_response.status.should == 200
-      
-      response    = JSON.parse(last_response.body)
-      collection  = response.fetch('visualizations')
-      collection.length.should == per_page
-      response.fetch('total_entries').should == total_entries
-    end
-
-    it 'returns filtered results' do
-      pending
-      post "/api/v1/viz?api_key=#{@api_key}",
-        factory.to_json, @headers
-
-      get "/api/v1/viz?api_key=#{@api_key}&type=table",
-        {}, @headers
-      last_response.status.should == 200
-      response    = JSON.parse(last_response.body)
-      collection  = response.fetch('visualizations')
-      collection.should be_empty
-
-      post "/api/v1/viz?api_key=#{@api_key}",
-        factory.to_json, @headers
-      post "/api/v1/viz?api_key=#{@api_key}",
-        factory.merge(type: 'table').to_json, @headers
-      get "/api/v1/viz?api_key=#{@api_key}&type=derived",
-        {}, @headers
-
-      last_response.status.should == 200
-      response    = JSON.parse(last_response.body)
-      collection  = response.fetch('visualizations')
-      collection.size.should == 2
-    end
-
-    it 'does not get table data if passed table_data=false' do
-      pending
-      table = table_factory
-
-      get "/api/v1/viz?api_key=#{@api_key}&type=table",
-        {}, @headers
-      last_response.status.should == 200
-      response        = JSON.parse(last_response.body)
-      visualizations  = response.fetch('visualizations')
-      visualizations.first.keys.should_not include :table_data
-    end
-  end # GET /api/v1/viz
-
-  describe 'GET /api/v1/viz/:id' do
-    it 'returns a visualization' do
-      pending
-      payload = factory
-      post "/api/v1/viz?api_key=#{@api_key}",
-        payload.to_json, @headers
-      id = JSON.parse(last_response.body).fetch('id')
-      
-      get "/api/v1/viz/#{id}?api_key=#{@api_key}", 
-        {}, @headers
-
-      last_response.status.should == 200
-      response = JSON.parse(last_response.body)
-
-      response.fetch('id')              .should_not be_nil
-      response.fetch('map_id')          .should_not be_nil
-      response.fetch('tags')            .should_not be_empty
-      response.fetch('description')     .should_not be_nil
-      response.fetch('related_tables')  .should_not be_nil
-    end
-  end # GET /api/v1/viz/:id
-
-  describe 'GET /api/v1/viz/:id/stats' do
-    it 'returns view stats for the visualization' do
-      pending
-      payload = factory
-
-      post "/api/v1/viz?api_key=#{@api_key}",
-        payload.to_json, @headers
-      id = JSON.parse(last_response.body).fetch('id')
-
-      get "/api/v1/viz/#{id}/stats?api_key=#{@api_key}", {}, @headers
-
-      last_response.status.should == 200
-      response = JSON.parse(last_response.body)
-      response.keys.length.should == 30
-    end
-  end # GET /api/v1/viz/:id/stats
 
   describe 'PUT /api/v1/viz/:id' do
     it 'updates an existing visualization' do
@@ -608,101 +457,225 @@ describe Api::Json::VisualizationsController do
     end
   end # DELETE /api/v1/tables/:id
 
-  describe 'GET /api/v1/viz/:id/viz' do
-    it 'renders vizjson v1' do
-      pending
-      table_attributes  = table_factory
-      table_id          = table_attributes.fetch('id')
-      get "/api/v1/viz/#{table_id}/viz?api_key=#{@api_key}",
-        {}, @headers
-      last_response.status.should == 200
-      response = Yajl::Parser.new.parse(last_response.body)
-      response.keys.length.should > 1
-      response.fetch('description').should_not be_empty
-    end
-  end # GET /api/v1/viz/:id/viz
-
-  describe 'GET /api/v2/viz/:id/viz' do
-    it 'renders vizjson v2' do
-      pending
-      table_attributes  = table_factory
-      table_id          = table_attributes.fetch('id')
-      get "/api/v2/viz/#{table_id}/viz?api_key=#{@api_key}",
-        {}, @headers
-      last_response.status.should == 200
-      Yajl::Parser.new.parse(last_response.body).keys.length.should > 1
-    end
-  end # GET /api/v2/viz/:id/viz
-
-  describe 'non existent visualization' do
-    it 'returns 404' do
-      pending
-
-      get "/api/v1/viz/9999?api_key=#{@api_key}", {}, @headers
-      last_response.status.should == 404
-
-      get "/api/v1/viz/9999/stats?api_key=#{@api_key}", {}, @headers
-      last_response.status.should == 404
-
-      put "/api/v1/viz/9999?api_key=#{@api_key}", {}, @headers
-      last_response.status.should == 404
-
-      delete "/api/v1/viz/9999?api_key=#{@api_key}", {}, @headers
-      last_response.status.should == 404
-
-      get "/api/v1/viz/9999/viz?api_key=#{@api_key}", {}, @headers
-      last_response.status.should == 404
-
-      get "/api/v2/viz/9999/viz?api_key=#{@api_key}", {}, @headers
-      last_response.status.should == 404
-    end
-  end # non existent visualization
-
-  describe 'tests visualization listing filters' do
-    it 'uses locked filter' do
+  describe '#slides_sorting' do
+    it 'checks proper working of prev/next' do
+      CartoDB::Visualization::Member.any_instance.stubs(:has_named_map?).returns(false)
       CartoDB::NamedMapsWrapper::NamedMaps.any_instance.stubs(:get).returns(nil)
 
-      post "/api/v1/viz?api_key=#{@api_key}", factory(locked: true).to_json, @headers
-      vis_1_id = JSON.parse(last_response.body).fetch('id')
-      post "/api/v1/viz?api_key=#{@api_key}", factory(locked: false).to_json, @headers
-      vis_2_id = JSON.parse(last_response.body).fetch('id')
+      map_id = ::Map.create(user_id: @user.id).id
 
-      get "/api/v1/viz?api_key=#{@api_key}", {}, @headers
-      last_response.status.should == 200
-      response    = JSON.parse(last_response.body)
-      collection  = response.fetch('visualizations')
-      collection.length.should eq 2
+      post api_v1_visualizations_create_url(user_domain: @user.username, api_key: @api_key),
+           factory({
+                     name: 'PARENT',
+                     type: CartoDB::Visualization::Member::TYPE_DERIVED
+                   }).to_json, @headers
+      body = JSON.parse(last_response.body)
+      parent_vis_id = body.fetch('id')
 
-      get "/api/v1/viz?api_key=#{@api_key}&locked=true", {}, @headers
-      last_response.status.should == 200
-      response    = JSON.parse(last_response.body)
-      collection  = response.fetch('visualizations')
-      collection.length.should eq 1
-      collection.first.fetch('id').should eq vis_1_id
+      # A
+      post api_v1_visualizations_create_url(user_domain: @user.username, api_key: @api_key),
+           {
+             name: 'A',
+             type: CartoDB::Visualization::Member::TYPE_SLIDE,
+             parent_id: parent_vis_id,
+             map_id: map_id
+           }.to_json, @headers
+      body = JSON.parse(last_response.body)
+      vis_a_id = body.fetch('id')
+      body.fetch('prev_id').should eq nil
+      body.fetch('next_id').should eq nil
 
-      get "/api/v1/viz?api_key=#{@api_key}&locked=false", {}, @headers
+      # standalone
+      post api_v1_visualizations_create_url(user_domain: @user.username, api_key: @api_key),
+           factory(name: 'standalone').to_json, @headers
+      body = JSON.parse(last_response.body)
+      body.fetch('prev_id').should eq nil
+      body.fetch('next_id').should eq nil
+
+      # A -> B
+      post api_v1_visualizations_create_url(user_domain: @user.username, api_key: @api_key),
+           {
+             name: 'B',
+             type: CartoDB::Visualization::Member::TYPE_SLIDE,
+             parent_id: parent_vis_id,
+             map_id: map_id,
+             prev_id: vis_a_id
+           }.to_json, @headers
+      body = JSON.parse(last_response.body)
+      vis_b_id = body.fetch('id')
+      body.fetch('prev_id').should eq vis_a_id
+      body.fetch('next_id').should eq nil
+
+      get api_v1_visualizations_show_url(user_domain: @user.username, api_key: @api_key, id: vis_a_id),
+          {}, @headers
+      body = JSON.parse(last_response.body)
+      body.fetch('prev_id').should eq nil
+      body.fetch('next_id').should eq vis_b_id
+      get api_v1_visualizations_show_url(user_domain: @user.username, api_key: @api_key, id: vis_b_id),
+          {}, @headers
+      body = JSON.parse(last_response.body)
+      body.fetch('prev_id').should eq vis_a_id
+      body.fetch('next_id').should eq nil
+
+      # C -> A -> B
+      post api_v1_visualizations_create_url(user_domain: @user.username, api_key: @api_key),
+           {
+             name: 'C',
+             type: CartoDB::Visualization::Member::TYPE_SLIDE,
+             parent_id: parent_vis_id,
+             map_id: map_id,
+             next_id: vis_a_id
+           }.to_json, @headers
+      body = JSON.parse(last_response.body)
+      vis_c_id = body.fetch('id')
+      body.fetch('prev_id').should eq nil
+      body.fetch('next_id').should eq vis_a_id
+
+      get api_v1_visualizations_show_url(user_domain: @user.username, api_key: @api_key, id: vis_c_id),
+          {}, @headers
+      body = JSON.parse(last_response.body)
+      body.fetch('prev_id').should eq nil
+      body.fetch('next_id').should eq vis_a_id
+      get api_v1_visualizations_show_url(user_domain: @user.username, api_key: @api_key, id: vis_a_id),
+          {}, @headers
+      body = JSON.parse(last_response.body)
+      body.fetch('prev_id').should eq vis_c_id
+      body.fetch('next_id').should eq vis_b_id
+      get api_v1_visualizations_show_url(user_domain: @user.username, api_key: @api_key, id: vis_b_id),
+          {}, @headers
+      body = JSON.parse(last_response.body)
+      body.fetch('prev_id').should eq vis_a_id
+      body.fetch('next_id').should eq nil
+
+      # C -> D -> A -> B
+      post api_v1_visualizations_create_url(user_domain: @user.username, api_key: @api_key),
+           {
+             name: 'D',
+             type: CartoDB::Visualization::Member::TYPE_SLIDE,
+             parent_id: parent_vis_id,
+             map_id: map_id,
+             prev_id: vis_c_id,
+             next_id: vis_a_id
+           }.to_json, @headers
+      body = JSON.parse(last_response.body)
+      vis_d_id = body.fetch('id')
+      body.fetch('prev_id').should eq vis_c_id
+      body.fetch('next_id').should eq vis_a_id
+
+
+      get api_v1_visualizations_show_url(user_domain: @user.username, api_key: @api_key, id: vis_c_id),
+          {}, @headers
+      body = JSON.parse(last_response.body)
+      body.fetch('prev_id').should eq nil
+      body.fetch('next_id').should eq vis_d_id
+
+      get api_v1_visualizations_show_url(user_domain: @user.username, api_key: @api_key, id: vis_d_id),
+          {}, @headers
+      body = JSON.parse(last_response.body)
+      body.fetch('prev_id').should eq vis_c_id
+      body.fetch('next_id').should eq vis_a_id
+
+      get api_v1_visualizations_show_url(user_domain: @user.username, api_key: @api_key, id: vis_a_id),
+          {}, @headers
+      body = JSON.parse(last_response.body)
+      body.fetch('prev_id').should eq vis_d_id
+      body.fetch('next_id').should eq vis_b_id
+
+      get api_v1_visualizations_show_url(user_domain: @user.username, api_key: @api_key, id: vis_b_id),
+          {}, @headers
+      body = JSON.parse(last_response.body)
+      body.fetch('prev_id').should eq vis_a_id
+      body.fetch('next_id').should eq nil
+
+      # C -> A -> B -> D
+      put api_v1_visualizations_set_next_id_url(user_domain: @user.username, api_key: @api_key, id: vis_d_id),
+           { next_id: nil }.to_json, @headers
       last_response.status.should == 200
-      response    = JSON.parse(last_response.body)
-      collection  = response.fetch('visualizations')
-      collection.length.should eq 1
-      collection.first.fetch('id').should eq vis_2_id
+
+      get api_v1_visualizations_show_url(user_domain: @user.username, api_key: @api_key, id: vis_c_id),
+          {}, @headers
+      body = JSON.parse(last_response.body)
+      body.fetch('prev_id').should eq nil
+      body.fetch('next_id').should eq vis_a_id
+
+      get api_v1_visualizations_show_url(user_domain: @user.username, api_key: @api_key, id: vis_a_id),
+          {}, @headers
+      body = JSON.parse(last_response.body)
+      body.fetch('prev_id').should eq vis_c_id
+      body.fetch('next_id').should eq vis_b_id
+
+      get api_v1_visualizations_show_url(user_domain: @user.username, api_key: @api_key, id: vis_b_id),
+          {}, @headers
+      body = JSON.parse(last_response.body)
+      body.fetch('prev_id').should eq vis_a_id
+      body.fetch('next_id').should eq vis_d_id
+
+      get api_v1_visualizations_show_url(user_domain: @user.username, api_key: @api_key, id: vis_d_id),
+          {}, @headers
+      body = JSON.parse(last_response.body)
+      body.fetch('prev_id').should eq vis_b_id
+      body.fetch('next_id').should eq nil
     end
   end
 
+  describe '#source_visualization_id_and_hierarchy' do
+    it 'checks proper working of parent_id' do
+      CartoDB::Visualization::Member.any_instance.stubs(:has_named_map?).returns(false)
+      CartoDB::NamedMapsWrapper::NamedMaps.any_instance.stubs(:get).returns(nil)
 
+      map_id = ::Map.create(user_id: @user.id).id
+
+      post api_v1_visualizations_create_url(user_domain: @user.username, api_key: @api_key),
+       factory({
+                 name: "PARENT #{UUIDTools::UUID.timestamp_create.to_s}",
+                 type: CartoDB::Visualization::Member::TYPE_DERIVED
+               }).to_json, @headers
+      body = JSON.parse(last_response.body)
+      parent_vis_id = body.fetch('id')
+
+      post api_v1_visualizations_create_url(user_domain: @user.username, api_key: @api_key),
+           {
+             name: "CHILD 1 #{UUIDTools::UUID.timestamp_create.to_s}",
+             type: CartoDB::Visualization::Member::TYPE_SLIDE,
+             parent_id: parent_vis_id,
+             map_id: map_id
+           }.to_json, @headers
+      vis_1_body = JSON.parse(last_response.body)
+
+      # This should also set as next sibiling of vis_1 as has no prev_id/next_id set
+      post api_v1_visualizations_create_url(user_domain: @user.username, api_key: @api_key),
+           {
+             name: "CHILD 2 #{UUIDTools::UUID.timestamp_create.to_s}",
+             type: CartoDB::Visualization::Member::TYPE_SLIDE,
+             source_visualization_id: vis_1_body.fetch('id'),
+             parent_id: parent_vis_id
+           }.to_json, @headers
+      vis_2_body = JSON.parse(last_response.body)
+
+      vis_2_body.fetch('prev_id').should eq vis_1_body.fetch('id')
+
+      vis_2_body.fetch('parent_id').should eq vis_1_body.fetch('parent_id')
+      vis_1_body.fetch('parent_id').should eq parent_vis_id
+      vis_2_body.fetch('id').should_not eq vis_1_body.fetch('id')
+    end
+  end
+
+  # Visualizations are always created with default_privacy
   def factory(attributes={})
-    map   = ::Map.create(user_id: @user.id)
-    name  = "visualization #{rand(9999)}"
     {
-      name:         name,
-      tags:         attributes.fetch(:tags, ['foo', 'bar']),
-      map_id:       map.id,
-      description:  'bogus',
-      type:         'derived',
-      privacy:      'public',
-      locked:       attributes.fetch(:locked, false)
+      name:                     attributes.fetch(:name, "visualization #{rand(9999)}"),
+      tags:                     attributes.fetch(:tags, ['foo', 'bar']),
+      map_id:                   attributes.fetch(:map_id, ::Map.create(user_id: @user.id).id),
+      description:              attributes.fetch(:description, 'bogus'),
+      type:                     attributes.fetch(:type, 'derived'),
+      privacy:                  attributes.fetch(:privacy, 'public'),
+      source_visualization_id:  attributes.fetch(:source_visualization_id, nil),
+      parent_id:                attributes.fetch(:parent_id, nil),
+      locked:                   attributes.fetch(:locked, false),
+      prev_id:                  attributes.fetch(:prev_id, nil),
+      next_id:                  attributes.fetch(:next_id, nil)
     }
-  end #factory
+  end
 
   def table_factory(options={})
     privacy = options.fetch(:privacy, 1)
@@ -716,18 +689,11 @@ describe Api::Json::VisualizationsController do
       payload.to_json, @headers
 
     table_attributes  = JSON.parse(last_response.body)
-    table_id          = table_attributes.fetch('id')
-    table_name        = table_attributes.fetch('name')
+    table_id          = table_attributes.fetch('table_visualization').fetch("id")
 
-    put "/api/v1/tables/#{table_id}?api_key=#{@api_key}",
+    put "/api/v1/viz/#{table_id}?api_key=#{@api_key}",
       { privacy: privacy }.to_json, @headers
 
-    sql = URI.escape(%Q{
-      INSERT INTO #{table_name} (description)
-      VALUES('bogus description')
-    })
-
-    #get "/api/v1/queries?sql=#{sql}&api_key=#{@api_key}", {}, @headers
     table_attributes
   end #table_factory
 end # Api::Json::VisualizationsController

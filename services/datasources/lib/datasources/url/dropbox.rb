@@ -1,6 +1,7 @@
 # encoding: utf-8
 
 require 'dropbox_sdk'
+require_relative '../base_oauth'
 
 module CartoDB
   module Datasources
@@ -33,6 +34,7 @@ module CartoDB
         # @throws UninitializedError
         # @throws MissingConfigurationError
         def initialize(config, user)
+          super
 
           raise UninitializedError.new('missing user instance', DATASOURCE_NAME)        if user.nil?
           raise MissingConfigurationError.new('missing app_key', DATASOURCE_NAME)       unless config.include?('app_key')
@@ -53,7 +55,7 @@ module CartoDB
         # Factory method
         # @param config : {}
         # @param user : User
-        # @return CartoDB::Synchronizer::FileProviders::Dropbox
+        # @return CartoDB::Datasources::Url::Dropbox
         def self.get_new(config, user)
           return new(config, user)
         end
@@ -164,6 +166,8 @@ module CartoDB
         # @throws AuthError
         # @throws DataDownloadError
         def get_resource_metadata(id)
+          raise DropboxPermissionError.new('No Dropbox client', DATASOURCE_NAME) unless @client.present?
+
           response = @client.metadata(id)
           item_data = format_item_data(response)
 

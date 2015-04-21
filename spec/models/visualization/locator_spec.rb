@@ -7,6 +7,7 @@ require_relative '../../../app/models/visualization/locator'
 require_relative '../../../app/models/visualization'
 require_relative '../../../app/models/visualization/member'
 require_relative '../../../app/models/visualization/migrator'
+require_relative '../../doubles/support_tables.rb'
 
 include CartoDB
 
@@ -14,14 +15,18 @@ describe Visualization::Locator do
 
   UUID = 'db0dfb0c-a944-11e3-a51e-30f9edfe5da6'
 
+  before(:each) do
+    support_tables_mock = Doubles::Visualization::SupportTables.new
+    Visualization::Relator.any_instance.stubs(:support_tables).returns(support_tables_mock)
+  end
+
   before do
     # Using Mocha stubs until we update RSpec (@see http://gofreerange.com/mocha/docs/Mocha/ClassMethods.html)
     CartoDB::NamedMapsWrapper::NamedMaps.any_instance.stubs(:get).returns(nil)
 
-    @db = Sequel.sqlite
+    @db = Rails::Sequel.connection
     Sequel.extension(:pagination)
 
-    Visualization::Migrator.new(@db).migrate
     Visualization.repository  = DataRepository::Backend::Sequel.new(@db, :visualizations)
 
     @user_id = UUIDTools::UUID.timestamp_create.to_s
@@ -90,7 +95,7 @@ describe Visualization::Locator do
 
     it 'returns nil if no visualization or table found' do
       Visualization::Collection.any_instance.stubs(:user_shared_vis).returns([])
-      @locator.get('bogus', @subdomain).should == [nil, nil]
+      @locator.get('220d2f46-b371-11e4-93f7-080027880ca6', @subdomain).should == [nil, nil]
     end
   end #get
 

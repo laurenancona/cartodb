@@ -45,10 +45,10 @@ module CartoDB
 
     def real_entity_type
       if self.entity_type == ENTITY_TYPE_VISUALIZATION
-        if self.entity.type == CartoDB::Visualization::Member::CANONICAL_TYPE
-          return CartoDB::Visualization::Member::CANONICAL_TYPE
+        if self.entity.type == CartoDB::Visualization::Member::TYPE_CANONICAL
+          return CartoDB::Visualization::Member::TYPE_CANONICAL
         else
-          return CartoDB::Visualization::Member::DERIVED_TYPE
+          return CartoDB::Visualization::Member::TYPE_DERIVED
         end
       else
         return self.entity_type
@@ -65,7 +65,7 @@ module CartoDB
               # be applied to a type of object. But with an array this is open
               # to more than one permission change at a time
               perm.each do |p|
-                if self.real_entity_type == CartoDB::Visualization::Member::DERIVED_TYPE
+                if self.real_entity_type == CartoDB::Visualization::Member::TYPE_DERIVED
                   if p['action'] == 'grant'
                     # At this moment just inform as read grant
                     if p['type'].include?('r')
@@ -76,7 +76,7 @@ module CartoDB
                       ::Resque.enqueue(::Resque::UserJobs::Mail::UnshareVisualization, self.entity.name, self.owner_username, affected_id)
                     end
                   end
-                elsif self.real_entity_type == CartoDB::Visualization::Member::CANONICAL_TYPE
+                elsif self.real_entity_type == CartoDB::Visualization::Member::TYPE_CANONICAL
                   if p['action'] == 'grant'
                     # At this moment just inform as read grant
                     if p['type'].include?('r')
@@ -232,11 +232,12 @@ module CartoDB
 
     # @return User|nil
     def owner
-      User.where(id:self.owner_id).first
+      @owner ||= User[self.owner_id] # See http://sequel.jeremyevans.net/rdoc-plugins/classes/Sequel/Plugins/Caching.html
     end
 
     # @param value User
     def owner=(value)
+      @owner = value
       self.owner_id = value.id
       self.owner_username = value.username
     end
@@ -354,8 +355,8 @@ module CartoDB
     end
 
     def clear
+      self.acl = []
       revoke_previous_permissions(entity)
-      self.access_control_list = DEFAULT_ACL_VALUE
       save
     end
 
@@ -433,7 +434,7 @@ module CartoDB
         # check permissions, if the owner does not have permissions
         # to see the table the layers using this table are removed
         perm = visualization.permission
-        if not table_visualization.has_permission?(perm.owner, CartoDB::Visualization::Member::PERMISSION_READONLY)
+        unless table_visualization.has_permission?(perm.owner, CartoDB::Visualization::Member::PERMISSION_READONLY)
           visualization.unlink_from(table)
         end
       end
@@ -442,7 +443,7 @@ module CartoDB
         # check permissions, if the owner does not have permissions
         # to see the table the visualization is removed
         perm = visualization.permission
-        if not table_visualization.has_permission?(perm.owner, CartoDB::Visualization::Member::PERMISSION_READONLY)
+        unless table_visualization.has_permission?(perm.owner, CartoDB::Visualization::Member::PERMISSION_READONLY)
           visualization.delete
         end
       end
@@ -463,7 +464,7 @@ module CartoDB
             check_related_visualizations(entity.table)
           end
         else
-          raise PermissionError.new('Unsupported entity type trying to grant permission')
+          raise PermissionError.new("Unsupported entity type trying to grant permission: #{entity.class.name}")
       end
     end
 

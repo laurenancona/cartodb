@@ -5,7 +5,6 @@ require_relative '../../spec_helper'
 require_relative '../../../services/data-repository/backend/sequel'
 require_relative '../../../services/data-repository/repository'
 require_relative '../../../app/models/synchronization/member'
-require_relative '../../../app/models/synchronization/migrator'
 
 include CartoDB
 
@@ -64,7 +63,7 @@ describe Synchronization::Member do
     random = rand(999)
     {
       name:       attributes.fetch(:name, "name #{random}"),
-      interval:   attributes.fetch(:interval, random),
+      interval:   attributes.fetch(:interval, 15 * 60 + random),
       state:      attributes.fetch(:state, 'enabled'),
     }
   end

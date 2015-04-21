@@ -20,10 +20,20 @@ class Api::Json::SynchronizationsController < Api::ApplicationController
   end
 
   def create
+    # Keep in sync with http://docs.cartodb.com/cartodb-platform/import-api.html#params-4
+    type_guessing_param    = !["false", false].include?(params[:type_guessing])
+    quoted_fields_guessing_param  = !["false", false].include?(params[:quoted_fields_guessing])
+    content_guessing_param = ["true", true].include?(params[:content_guessing])
+
+    create_derived_vis = ["true", true].include?(params[:create_vis])
+
     member_attributes = payload.merge(
-        name:       params[:table_name],
-        user_id:    current_user.id,
-        state:      Synchronization::Member::STATE_CREATED
+        name:                   params[:table_name],
+        user_id:                current_user.id,
+        state:                  Synchronization::Member::STATE_CREATED,
+        type_guessing:          type_guessing_param,
+        quoted_fields_guessing: quoted_fields_guessing_param,
+        content_guessing:       content_guessing_param
     )
 
     if from_sync_file_provider?
@@ -40,13 +50,18 @@ class Api::Json::SynchronizationsController < Api::ApplicationController
 
     member = Synchronization::Member.new(member_attributes)
 
+
     options = {
       user_id:            current_user.id,
       table_name:         params[:table_name].presence,
       data_source:        params[:url],
       synchronization_id: member.id,
       service_name:       service_name,
-      service_item_id:    service_item_id
+      service_item_id:    service_item_id,
+      type_guessing:          type_guessing_param,
+      quoted_fields_guessing: quoted_fields_guessing_param,
+      content_guessing:       content_guessing_param,
+      create_visualization:   create_derived_vis
     }
       
     data_import = DataImport.create(options)
@@ -66,6 +81,8 @@ class Api::Json::SynchronizationsController < Api::ApplicationController
     render_jsonp({ errors: member.full_errors }, 400)
     puts exception.to_s
     puts exception.backtrace
+  rescue CartoDB::InvalidInterval => exception
+    render_jsonp({ errors: "#{exception.detail['message']}: #{exception.detail['hint']}" }, 400)
   end
 
   def sync(from_sync_now=false)

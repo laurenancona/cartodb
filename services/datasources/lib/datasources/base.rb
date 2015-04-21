@@ -21,6 +21,20 @@ module CartoDB
       # .zip
       FORMAT_COMPRESSED = 'zip'
 
+      # If data size cannot be determined, this will be returned as its size in the item metadata
+      NO_CONTENT_SIZE_PROVIDED = 0
+
+      def initialize(*args)
+        @logger = nil
+      end
+
+      # Small helper method to know if metadata includes a valid resource size value or not
+      # @param resource_metadata Hash { :size, ... }
+      # @return bool
+      def has_resource_size?(resource_metadata)
+        resource_metadata[:size] > NO_CONTENT_SIZE_PROVIDED
+      end
+
       # Factory method
       # @param config {}
       # @return mixed
@@ -69,12 +83,13 @@ module CartoDB
       # Log a message
       # @param message String
       def log(message)
-        puts message
+        puts message if @logger.nil?
+        @logger.append(message) unless @logger.nil?
       end
 
       # @param logger Mixed|nil Set or unset the logger
       def logger=(logger=nil)
-        # Do nothing but not break
+        @logger = logger
       end
 
       # Just return datasource name
@@ -112,6 +127,13 @@ module CartoDB
       # @param component mixed
       def report_component=(component)
         raise 'To be implemented in child classes'
+      end
+
+      # If true, a single resource id might return >1 subresources (each one spawning a table)
+      # @param id String
+      # @return Bool
+      def multi_resource_import_supported?(id)
+        false
       end
 
       private_class_method :new

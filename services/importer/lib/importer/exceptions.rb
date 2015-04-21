@@ -1,19 +1,51 @@
 # encoding: utf-8
 
+require_relative '../../../../services/datasources/lib/datasources/exceptions'
+
 module CartoDB
   module Importer2
 
+    class BaseImportError < StandardError
+      def initialize(message, error_code=nil)
+        super(message)
+        self.error_code = error_code
+      end
+
+      attr_accessor :error_code
+    end
+
     # Generic/unmapped errors
-    class GenericImportError                    < StandardError; end
+    class GenericImportError < StandardError; end
     # Mapped errors
-    class FileTooBigError                       < StandardError; end
+
+    class FileTooBigError < BaseImportError
+      def initialize(message="The file supplied exceeds the maximum allowed for the user")
+        super(message, 6666)
+      end
+    end
+
+    class TooManyTableRowsError < BaseImportError
+      def initialize(message="The imported table contains more rows than allowed for the user")
+        super(message, 6668)
+      end
+    end
+
+    class UserConcurrentImportsLimitError < BaseImportError
+      def initialize(message="User already using all allowed import slots")
+        super(message,6669)
+      end
+    end
+
     class InstallError                          < StandardError; end
     class EmptyFileError                        < StandardError; end
     class ExtractionError                       < StandardError; end
+    class PasswordNeededForExtractionError      < ExtractionError; end
+    class TooManyLayersError                    < StandardError; end
     class GeometryCollectionNotSupportedError   < StandardError; end
     class InvalidGeoJSONError                   < StandardError; end
     class InvalidShpError                       < StandardError; end
     class KmlNetworkLinkError                   < StandardError; end
+    class InvalidNameError                      < StandardError; end
     class LoadError                             < StandardError; end
     class MissingProjectionError                < StandardError; end
     class ShpNormalizationError                 < StandardError; end
@@ -25,12 +57,16 @@ module CartoDB
     class UnsupportedFormatError                < StandardError; end
     class UploadError                           < StandardError; end
     class DownloadError                         < StandardError; end
+    class TooManyNodesError                     < StandardError; end
     class GDriveNotPublicError                  < StandardError; end
     class EncodingDetectionError                < StandardError; end
     class XLSXFormatError                       < StandardError; end
     class MalformedCSVException                 < GenericImportError; end
+    class TooManyColumnsError                   < GenericImportError; end
+    class DuplicatedColumnError                 < GenericImportError; end
+    class StatementTimeoutError                 < BaseImportError; end
 
-    # @see also app/models/synchronization/member.rb for more error codes
+    # @see also app/models/synchronization/member.rb => run() for more error codes
     # @see config/initializers/carto_db.rb For the texts
     ERRORS_MAP = {
       InstallError                          => 0001,
@@ -41,27 +77,44 @@ module CartoDB
       XLSXFormatError                       => 1004,
       EmptyFileError                        => 1005,
       InvalidShpError                       => 1006,
+      TooManyNodesError                     => 1007,
       GDriveNotPublicError                  => 1010,
+      InvalidNameError                      => 1014,
+      PasswordNeededForExtractionError      => 1018,
+      TooManyLayersError                    => 1019,
       LoadError                             => 2001,
       EncodingDetectionError                => 2002,
       MalformedCSVException                 => 2003,
+      TooManyColumnsError                   => 2004,
+      DuplicatedColumnError                 => 2005,
       InvalidGeoJSONError                   => 3007,
       UnknownSridError                      => 3008,
       ShpNormalizationError                 => 3009,
       MissingProjectionError                => 3101,
       GeometryCollectionNotSupportedError   => 3201,
       KmlNetworkLinkError                   => 3202,
+      FileTooBigError                       => 6666,
+      StatementTimeoutError                 => 6667,
+      TooManyTableRowsError                 => 6668,
+      UserConcurrentImportsLimitError       => 6669,
       StorageQuotaExceededError             => 8001,
       TableQuotaExceededError               => 8002,
       UnknownError                          => 99999,
-      UnknownSridError                      => 3008,
-      UnsupportedFormatError                => 1002,
-      XLSXFormatError                       => 1004,
-      UploadError                           => 1000,
-      DownloadError                         => 1001,
-      GDriveNotPublicError                  => 1010,
-      EncodingDetectionError                => 2002,
-      FileTooBigError                       => 6666
+      CartoDB::Datasources::DatasourceBaseError                   => 1012,
+      CartoDB::Datasources::AuthError                             => 1011,
+      CartoDB::Datasources::TokenExpiredOrInvalidError            => 1012,
+      CartoDB::Datasources::InvalidServiceError                   => 1012,
+      CartoDB::Datasources::DataDownloadError                     => 1011,
+      CartoDB::Datasources::MissingConfigurationError             => 1012,
+      CartoDB::Datasources::UninitializedError                    => 1012,
+      CartoDB::Datasources::NoResultsError                        => 1015,
+      CartoDB::Datasources::ParameterError                        => 99999,
+      CartoDB::Datasources::ServiceDisabledError                  => 99999,
+      CartoDB::Datasources::OutOfQuotaError                       => 8001,
+      CartoDB::Datasources::InvalidInputDataError                 => 1012,
+      CartoDB::Datasources::ResponseError                         => 1011,
+      CartoDB::Datasources::ExternalServiceError                  => 1012,
+      CartoDB::Datasources::DropboxPermissionError                => 1016
     }
   end # Importer2
 end # CartoDB

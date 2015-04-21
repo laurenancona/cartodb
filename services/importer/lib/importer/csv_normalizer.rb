@@ -20,8 +20,9 @@ module CartoDB
       DEFAULT_ENCODING      = 'UTF-8'
       DEFAULT_QUOTE         = '"'
       OUTPUT_DELIMITER      = ','       # Normalized CSVs will use this delimiter
-      ENCODING_CONFIDENCE   = 30 
+      ENCODING_CONFIDENCE   = 28
       ACCEPTABLE_ENCODINGS  = %w{ ISO-8859-1 ISO-8859-2 UTF-8 }
+      REVERSE_LINE_FEED     = "\x8D"
 
 
       def initialize(filepath, job=nil)
@@ -29,6 +30,7 @@ module CartoDB
         @job      = job || Job.new
         @delimiter = nil
         @force_normalize = false
+        @encoding = nil
       end
 
       def force_normalize
@@ -63,8 +65,8 @@ module CartoDB
         lines_for_detection = Array.new
 
         LINES_FOR_DETECTION.times {
-          line = stream.gets 
-          lines_for_detection << line unless line.nil?
+          line = stream.gets
+          lines_for_detection << remove_quoted_strings(line) unless line.nil?
         }
 
         stream.rewind
@@ -123,7 +125,6 @@ module CartoDB
 
       def normalize(temporary_filepath)
         temporary_csv = ::CSV.open(temporary_filepath, 'w', col_sep: OUTPUT_DELIMITER)
-
         File.open(filepath, 'rb', external_encoding: encoding)
         .each_line(line_delimiter) { |line|
           row = parsed_line(line)
@@ -134,13 +135,16 @@ module CartoDB
         temporary_csv.close
 
         @delimiter = OUTPUT_DELIMITER
-      rescue ArgumentError
+      rescue ArgumentError, Encoding::UndefinedConversionError
         raise EncodingDetectionError
       end
 
-      def parsed_line(line)
-        ::CSV.parse_line(line.chomp.encode('UTF-8'), csv_options)
-      rescue
+      def   parsed_line(line)
+        ::CSV.parse_line(line.chomp.encode('UTF-8',
+                         :fallback => {
+                             REVERSE_LINE_FEED.force_encoding("Windows-1252") => ""
+                         }), csv_options)
+      rescue => e
         nil
       end
 
@@ -167,7 +171,7 @@ module CartoDB
       def needs_normalization?
         (!ACCEPTABLE_ENCODINGS.include?(encoding))  ||
         (delimiter != DEFAULT_DELIMITER)            ||
-        single_column?                              
+        single_column?
       end
 
       def single_column?
@@ -184,18 +188,25 @@ module CartoDB
       end
 
       def encoding
+        return @encoding unless @encoding.nil?
+
         source_file = SourceFile.new(filepath)
-        return source_file.encoding if source_file.encoding
+        if source_file.encoding
+          @encoding = source_file.encoding
+        else
+          data    = File.open(filepath, 'r')
+          sample  = data.read(SAMPLE_READ_LIMIT)
+          data.close
 
-        data    = File.open(filepath, 'r')
-        sample  = data.read(SAMPLE_READ_LIMIT)
-        data.close
-
-        result = CharlockHolmes::EncodingDetector.detect(sample)
-        if result.fetch(:confidence, 0) < ENCODING_CONFIDENCE
-          return DEFAULT_ENCODING
+          result = CharlockHolmes::EncodingDetector.detect(sample)
+          if result.fetch(:confidence, 0) < ENCODING_CONFIDENCE
+            @encoding = DEFAULT_ENCODING
+          else
+            @encoding = result.fetch(:encoding, DEFAULT_ENCODING)
+          end
         end
-        result.fetch(:encoding, DEFAULT_ENCODING)
+
+        @encoding
       rescue
         DEFAULT_ENCODING
       end
@@ -245,6 +256,10 @@ module CartoDB
         m = mean(items_list)
         sum = items_list.inject(0){|accum, i| accum + (i-m)**2 }
         sum / (items_list.length - 1).to_f
+      end
+
+      def remove_quoted_strings(input)
+        input.gsub(/"[^\\"]*"/, '')
       end
 
       attr_writer :temporary_directory

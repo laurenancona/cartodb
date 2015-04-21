@@ -1,6 +1,5 @@
 # encoding: utf-8 
 require 'fileutils'
-require 'zip/zip'
 
 module DataRepository
   module Filesystem
@@ -9,7 +8,11 @@ module DataRepository
 
       def initialize(base_directory=DEFAULT_PREFIX)
         @base_directory = base_directory
-      end #initialize
+      end
+
+      def create_base_directory
+        FileUtils.mkpath @base_directory unless exists? @base_directory
+      end
 
       def store(path, data)
         FileUtils.mkpath( File.dirname( fullpath_for(path) ) )
@@ -19,47 +22,34 @@ module DataRepository
         end if data.respond_to?(:bucket)
         
         File.open(fullpath_for(path), 'wb') do |file|
-          while chunk = data.gets
-            file.write(chunk) 
+          chunk = data.gets
+          while chunk
+            file.write(chunk)
+            chunk = data.gets
           end
         end unless data.respond_to?(:bucket)
 
         path
-      end #store
+      end
 
       def fetch(path)
         File.open(fullpath_for(path), 'r')
-      end #fetch
+      end
 
       def exists?(path)
         File.exists?(fullpath_for(path))
-      end #exists?
+      end
 
-      def zip(path)
-        zip_path            = "#{fullpath_for(path)}.zip"
-        zip_base_directory  = File.dirname(fullpath_for(path))
-
-        Zip::ZipFile.open(zip_path, 1) do |zip|
-          targets_for(path).each do |path|
-            zip.add(relative_path_for(path, zip_base_directory), path)
-          end
+      # Use from controlled environments always
+      def remove(path)
+        if exists?(path)
+          File.delete(fullpath_for(path))
         end
-
-        relative_path_for(zip_path, base_directory)
-      end #zip
-
-      def unzip(zip_path)
-        Zip::ZipFile.open(fullpath_for(zip_path)) do |zipfile|
-          zipfile.each do |entry|
-            next if entry.directory?
-            self.store(entry.name, entry.get_input_stream)
-          end
-        end
-      end #unzip
+      end
 
       def fullpath_for(path)
         File.join(base_directory, path)
-      end #fullpath_for
+      end
 
       private
 
@@ -74,16 +64,16 @@ module DataRepository
         ].flatten
           .uniq
           .delete_if { |entry| dot_directory?(entry) }
-      end #targets_for
+      end
 
       def dot_directory?(path)
         path == '.' || path == '..'
-      end #dot_directory?
+      end
 
       def relative_path_for(path, base_directory)
        (path.split('/') - base_directory.split('/')).join('/')
-      end #relative_path_for
-    end # Local
-  end # Filesystem
-end # DataRepository
+      end
+    end
+  end
+end
 

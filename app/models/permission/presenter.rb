@@ -14,7 +14,7 @@ module CartoDB
     def to_poro
       {
         id:         @permission.id,
-        owner:      @user_presenter.decorate(@permission.owner_id),
+        owner:      @user_presenter.decorate_user(@permission.owner),
         entity: {
           id:       @permission.entity_id,
           type:     @permission.entity_type
@@ -30,6 +30,8 @@ module CartoDB
         updated_at: @permission.updated_at
       }
     end
+
+    private
 
     def entity_decoration(entry)
       if entry[:type] == CartoDB::Permission::TYPE_USER

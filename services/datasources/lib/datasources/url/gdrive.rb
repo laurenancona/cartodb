@@ -36,6 +36,8 @@ module CartoDB
         # @throws UninitializedError
         # @throws MissingConfigurationError
         def initialize(config, user)
+          super
+
           raise UninitializedError.new('missing user instance', DATASOURCE_NAME)            if user.nil?
           raise MissingConfigurationError.new('missing application_name', DATASOURCE_NAME)  unless config.include?('application_name')
           raise MissingConfigurationError.new('missing client_id', DATASOURCE_NAME)         unless config.include?('client_id')
@@ -62,7 +64,7 @@ module CartoDB
         # Factory method
         # @param config {}
         # @param user User
-        # @return CartoDB::Synchronizer::FileProviders::GDrive
+        # @return CartoDB::Datasources::Url::GDrive
         def self.get_new(config, user)
           new(config, user)
         end
@@ -78,7 +80,8 @@ module CartoDB
         # @return string | nil
         def get_auth_url(use_callback_flow=true)
           if use_callback_flow
-            @client.authorization.state = CALLBACK_STATE_DATA_PLACEHOLDER.sub('user', @user.username).sub('service', DATASOURCE_NAME)
+            @client.authorization.state = CALLBACK_STATE_DATA_PLACEHOLDER.sub('user', @user.username)
+                                                                         .sub('service', DATASOURCE_NAME)
           else
             @client.authorization.redirect_uri = REDIRECT_URI
           end
@@ -157,7 +160,7 @@ module CartoDB
             batch_request.add(
               api_method: @drive.files.list,
               parameters: {
-                trashed:  'false',
+                trashed:  false,
                 q:        "mime_type = '#{mime_type}'",
                 fields:   FIELDS_TO_RETRIEVE
               }
@@ -187,7 +190,7 @@ module CartoDB
           result = @client.execute(uri: item_data.fetch(:url))
 
           if result.status != 200
-            if result.data['error'].nil? || result.data['error']['message'].nil?
+            if result.data.nil? || result.data['error'].nil? || result.data['error']['message'].nil?
               error_message = 'Unknown error'
             else
               error_message = result.data['error']['message']
@@ -207,8 +210,10 @@ module CartoDB
         # @return Hash
         # @throws TokenExpiredOrInvalidError
         # @throws DataDownloadError
+        # @throws NotFoundDownloadError
         def get_resource_metadata(id)
           result = @client.execute( api_method: @drive.files.get, parameters: { fileId: id } )
+          raise NotFoundDownloadError.new("(#{result.status}) retrieving file #{id} metadata: #{result.data['error']['message']}, should stop syncing", DATASOURCE_NAME) if result.status == 404
           raise DataDownloadError.new("(#{result.status}) retrieving file #{id} metadata: #{result.data['error']['message']}", DATASOURCE_NAME) if result.status != 200
           item_data = format_item_data(result.data.to_hash)
           return item_data.to_hash
@@ -305,7 +310,7 @@ module CartoDB
             data[:url] = item_data.fetch('exportLinks').first.last
             data[:url] = data[:url][0..data[:url].rindex('=')] + 'csv'
             data[:filename] = clean_filename(item_data.fetch('title')) + '.csv'
-            data[:size] = 0
+            data[:size] = NO_CONTENT_SIZE_PROVIDED
           else
             data[:url] = item_data.fetch('downloadUrl')
             # For Drive files, title == filename + extension

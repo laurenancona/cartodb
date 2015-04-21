@@ -3,8 +3,9 @@ require_relative '../spec_helper'
 
 describe User do
   before(:all) do
+    @user_password = 'admin123'
     puts "\n[rspec][user_spec] Creating test user databases..."
-    @user     = create_user :email => 'admin@example.com', :username => 'admin', :password => 'admin123'
+    @user     = create_user :email => 'admin@example.com', :username => 'admin', :password => @user_password
     @user2    = create_user :email => 'user@example.com',  :username => 'user',  :password => 'user123'
 
     puts "[rspec][user_spec] Loading user data..."
@@ -100,7 +101,7 @@ describe User do
   end
 
   it "should not allow a username in use by an organization" do
-    organization = create_org('testusername', 10.megabytes, 1)
+    create_org('testusername', 10.megabytes, 1)
     @user.username = 'testusername'
     @user.valid?.should be_false
     @user.username = 'wadus'
@@ -111,7 +112,7 @@ describe User do
     it "should not be valid if his organization doesn't have more seats" do
 
       organization = create_org('testorg', 10.megabytes, 1)
-      user1 = create_user email: 'user1@testorg.com', username: 'user1', password: 'user1'
+      user1 = create_user email: 'user1@testorg.com', username: 'user1', password: 'user11'
       user1.organization = organization
       user1.save
       organization.owner_id = user1.id
@@ -238,7 +239,7 @@ describe User do
     it 'should create remote user in central if needed' do
       pending "Central API credentials not provided" unless User.new.sync_data_with_cartodb_central?
       organization = create_org('testorg', 500.megabytes, 1)
-      user = create_user email: 'user1@testorg.com', username: 'user1', password: 'user1'
+      user = create_user email: 'user1@testorg.com', username: 'user1', password: 'user11'
       user.organization = organization
       user.save
       Cartodb::Central.any_instance.expects(:create_organization_user).with(organization.name, user.allowed_attributes_to_central(:create)).once
@@ -247,6 +248,27 @@ describe User do
     it 'should update remote user in central if needed' do
       pending
     end
+  end
+
+  it 'should store feature flags' do
+    ff = FactoryGirl.create(:feature_flag, id: 10001, name: 'ff10001')
+
+    user = create_user :email => 'ff@example.com', :username => 'ff-user-01', :password => 'ff-user-01'
+    user.set_relationships_from_central({ feature_flags: [ ff.id.to_s ]})
+    user.save
+    user.feature_flags_user.map { |ffu| ffu.feature_flag_id }.should include(ff.id)
+  end
+
+  it 'should delete feature flags assignations to a deleted user' do
+    ff = FactoryGirl.create(:feature_flag, id: 10002, name: 'ff10002')
+
+    user = create_user :email => 'ff2@example.com', :username => 'ff2-user-01', :password => 'ff2-user-01'
+    user.set_relationships_from_central({ feature_flags: [ ff.id.to_s ]})
+    user.save
+    user_id = user.id
+    user.destroy
+    Rails::Sequel.connection["select count(*) from feature_flags_users where user_id = '#{user_id}'"].first[:count].should eq 0
+    Rails::Sequel.connection["select count(*) from feature_flags where id = '#{ff.id}'"].first[:count].should eq 1
   end
 
   it "should have a default dashboard_viewed? false" do
@@ -453,6 +475,30 @@ describe User do
     end
   end
 
+  describe '#private_maps_enabled' do
+    it 'should not have private maps enabled by default' do
+      user_missing_private_maps = create_user :email => 'user_mpm@example.com',  :username => 'usermpm',  :password => 'usermpm'
+      user_missing_private_maps.private_maps_enabled.should eq false
+    end
+
+    it 'should have private maps if enabled' do
+      user_with_private_maps = create_user :email => 'user_wpm@example.com',  :username => 'userwpm',  :password => 'userwpm', :private_maps_enabled => true
+      user_with_private_maps.private_maps_enabled.should eq true
+    end
+
+    it 'should not have private maps if disabled' do
+      user_without_private_maps = create_user :email => 'user_opm@example.com',  :username => 'useropm',  :password => 'useropm', :private_maps_enabled => false
+      user_without_private_maps.private_maps_enabled.should eq false
+    end
+
+    it 'should have private maps if he is AMBASSADOR even if disabled' do
+      user_without_private_maps = create_user :email => 'user_opm2@example.com',  :username => 'useropm2',  :password => 'useropm2', :private_maps_enabled => false
+      user_without_private_maps.stubs(:account_type).returns('AMBASSADOR')
+      user_without_private_maps.private_maps_enabled.should eq true
+    end
+
+  end
+
   describe '#get_geocoding_calls' do
     before do
       delete_user_data @user
@@ -476,11 +522,51 @@ describe User do
     end
   end
 
+  describe "organization user deletion" do
+    it "should transfer geocodings and tweet imports to owner" do
+      u1 = create_user(email: 'u1@exampleb.com', username: 'ub1', password: 'admin123')
+      org = create_org('cartodbtestb', 1234567890, 5)
+
+      u1.organization = org
+      u1.save
+      u1.reload
+      org = u1.organization
+      org.owner_id = u1.id
+      org.save
+      u1.reload
+
+      u2 = create_user(email: 'u2@exampleb.com', username: 'ub2', password: 'admin123', organization: org)
+
+      FactoryGirl.create(:geocoding, user: u2, kind: 'high-resolution', created_at: Time.now, processed_rows: 1, formatter: 'b')
+
+      st = SearchTweet.new
+      st.user = u2
+      st.table_id = '96a86fb7-0270-4255-a327-15410c2d49d4'
+      st.data_import_id = '96a86fb7-0270-4255-a327-15410c2d49d4'
+      st.service_item_id = '555'
+      st.retrieved_items = 5
+      st.state = ::SearchTweet::STATE_COMPLETE
+      st.save
+
+      u1.reload
+      u2.reload
+      u2.get_geocoding_calls.should == 1
+      u2.get_twitter_imports_count.should == 5
+      u1.get_geocoding_calls.should == 0
+      u1.get_twitter_imports_count.should == 0
+
+      u2.destroy
+      u1.reload
+      u1.get_geocoding_calls.should == 1
+      u1.get_twitter_imports_count.should == 5
+    end
+  end
+
   it "should have many tables" do
     @user2.tables.should be_empty
-    create_table :user_id => @user2.id, :name => 'My first table', :privacy => Table::PRIVACY_PUBLIC
+    create_table :user_id => @user2.id, :name => 'My first table', :privacy => UserTable::PRIVACY_PUBLIC
     @user2.reload
-    @user2.tables.all.should == [Table.first(:user_id => @user2.id)]
+    @user2.tables.all.should == [UserTable.first(:user_id => @user2.id)]
   end
 
   it "should generate a data report"
@@ -488,10 +574,10 @@ describe User do
   it "should update remaining quotas when adding or removing tables" do
     initial_quota = @user2.remaining_quota
 
-    expect { create_table :user_id => @user2.id, :privacy => Table::PRIVACY_PUBLIC }
+    expect { create_table :user_id => @user2.id, :privacy => UserTable::PRIVACY_PUBLIC }
       .to change { @user2.remaining_table_quota }.by(-1)
 
-    table = Table.filter(:user_id => @user2.id).first
+    table = Table.new(user_table: UserTable.filter(:user_id => @user2.id).first)
     50.times { |i| table.insert_row!(:name => "row #{i}") }
 
     @user2.remaining_quota.should be < initial_quota
@@ -777,7 +863,7 @@ describe User do
 
   it "should remove its database and database user after deletion" do
     doomed_user = create_user :email => 'doomed1@example.com', :username => 'doomed1', :password => 'doomed123'
-    create_table :user_id => doomed_user.id, :name => 'My first table', :privacy => Table::PRIVACY_PUBLIC
+    create_table :user_id => doomed_user.id, :name => 'My first table', :privacy => UserTable::PRIVACY_PUBLIC
     doomed_user.reload
     Rails::Sequel.connection["select count(*) from pg_catalog.pg_database where datname = '#{doomed_user.database_name}'"]
       .first[:count].should == 1
@@ -805,7 +891,7 @@ describe User do
                       :data_source => '/../db/fake_data/clubbing.csv').run_import!
     doomed_user.add_layer Layer.create(:kind => 'carto')
     table_id  = data_import.table_id
-    uuid      = Table.where(id: table_id).first.table_visualization.id
+    uuid      = UserTable.where(id: table_id).first.table_visualization.id
 
     CartoDB::Varnish.any_instance.expects(:purge)
       .with("#{doomed_user.database_name}.*")
@@ -815,14 +901,13 @@ describe User do
       .returns(true)
     CartoDB::Varnish.any_instance.expects(:purge)
       .with(".*#{uuid}:vizjson")
-      .times(5 + 2) #5 overlays
+      .times(2 + 5)
       .returns(true)
-    Table.any_instance.expects(:delete_tile_style).returns(true)
 
     doomed_user.destroy
 
     DataImport.where(:user_id => doomed_user.id).count.should == 0
-    Table.where(:user_id => doomed_user.id).count.should == 0
+    UserTable.where(:user_id => doomed_user.id).count.should == 0
     Layer.db["SELECT * from layers_users WHERE user_id = '#{doomed_user.id}'"].count.should == 0
   end
 
@@ -910,16 +995,111 @@ describe User do
   end
 
   describe '#link_ghost_tables' do
-    it "should correctly count real tables" do
-    reload_user_data(@user) && @user.reload
-      @user.in_database.run('create table ghost_table (test integer)')
-      @user.real_tables.map { |c| c[:relname] }.should =~ ["ghost_table", "import_csv_1", "twitters"]
-      @user.real_tables.size.should == 3
-      @user.tables.count.should == 2
+    before(:each) do
+      @user.in_database.run('drop table if exists ghost_table')
+      @user.in_database.run('drop table if exists non_ghost_table')
+      @user.in_database.run('drop table if exists ghost_table_renamed')
+      @user.reload
+      @user.table_quota = 100
+      @user.save
     end
 
-    it "should link a table with null table_id" do
-      reload_user_data(@user) && @user.reload
+    it "should correctly count real tables" do
+      @user.in_database.run('create table ghost_table (cartodb_id integer, the_geom geometry, the_geom_webmercator geometry, updated_at date, created_at date)')
+      @user.in_database.run('create table non_ghost_table (test integer)')
+      @user.real_tables.map { |c| c[:relname] }.should =~ ["ghost_table", "non_ghost_table"]
+      @user.real_tables.size.should == 2
+    end
+
+    it "should return cartodbfied tables" do
+      @user.in_database.run('create table ghost_table (cartodb_id integer, the_geom geometry, the_geom_webmercator geometry, updated_at date, created_at date)')
+
+      @user.in_database.run(%Q{
+        CREATE OR REPLACE FUNCTION test_quota_per_row()
+          RETURNS trigger
+          AS $$
+          BEGIN
+            RETURN NULL;
+          END;
+          $$
+          LANGUAGE plpgsql;
+      })
+      @user.in_database.run( %Q{
+        CREATE TRIGGER test_quota_per_row BEFORE INSERT ON ghost_table EXECUTE PROCEDURE test_quota_per_row()
+      })
+
+      @user.in_database.run('create table non_ghost_table (test integer)')
+      tables = @user.search_for_cartodbfied_tables
+      tables.should =~ ['ghost_table']
+    end
+
+    it "should link a table in the database" do
+      tables = @user.tables.all.map(&:name)
+      @user.in_database.run('create table ghost_table (cartodb_id integer, the_geom geometry, the_geom_webmercator geometry, updated_at date, created_at date)')
+
+      @user.in_database.run(%Q{
+        CREATE OR REPLACE FUNCTION test_quota_per_row()
+          RETURNS trigger
+          AS $$
+          BEGIN
+            RETURN NULL;
+          END;
+          $$
+          LANGUAGE plpgsql;
+      })
+      @user.in_database.run( %Q{
+        CREATE TRIGGER test_quota_per_row BEFORE INSERT ON ghost_table EXECUTE PROCEDURE test_quota_per_row()
+      })
+
+      @user.link_ghost_tables
+      new_tables = @user.tables.all.map(&:name)
+      new_tables.should include('ghost_table')
+    end
+
+    it "should link a renamed table in the database" do
+      tables = @user.tables.all.map(&:name)
+      @user.in_database.run('create table ghost_table_2 (cartodb_id integer, the_geom geometry, the_geom_webmercator geometry, updated_at date, created_at date)')
+
+      @user.in_database.run(%Q{
+        CREATE OR REPLACE FUNCTION test_quota_per_row()
+          RETURNS trigger
+          AS $$
+          BEGIN
+            RETURN NULL;
+          END;
+          $$
+          LANGUAGE plpgsql;
+      })
+      @user.in_database.run( %Q{
+        CREATE TRIGGER test_quota_per_row BEFORE INSERT ON ghost_table_2 EXECUTE PROCEDURE test_quota_per_row()
+      })
+
+      @user.link_ghost_tables
+      @user.in_database.run('alter table ghost_table_2 rename to ghost_table_renamed')
+      @user.link_ghost_tables
+      new_tables = @user.tables.all.map(&:name)
+      new_tables.should include('ghost_table_renamed')
+      new_tables.should_not include('ghost_table_2')
+      # check visualization name
+      table = @user.tables.find(:name => 'ghost_table_renamed').first
+      table.table_visualization.name.should == 'ghost_table_renamed'
+
+
+    end
+
+    it "should remove reference to a removed table in the database" do
+      tables = @user.tables.all.map(&:name)
+      @user.in_database.run('create table ghost_table (cartodb_id integer, the_geom geometry, the_geom_webmercator geometry, updated_at date, created_at date)')
+      @user.link_ghost_tables
+      @user.in_database.run('drop table ghost_table')
+      @user.link_ghost_tables
+      new_tables = @user.tables.all.map(&:name)
+      new_tables.should_not include('ghost_table')
+    end
+
+    # not sure what the following tests mean or why they were
+    # created
+    xit "should link a table with null table_id" do
       table = create_table :user_id => @user.id, :name => 'My table'
       initial_count = @user.tables.count
       table_id = table.table_id
@@ -930,8 +1110,7 @@ describe User do
       @user.tables.count.should == initial_count
     end
 
-    it "should link a table with wrong table_id" do
-      reload_user_data(@user) && @user.reload
+    xit "should link a table with wrong table_id" do
       table = create_table :user_id => @user.id, :name => 'My table 2'
       initial_count = @user.tables.count
       table_id = table.table_id
@@ -943,23 +1122,15 @@ describe User do
     end
 
     it "should remove a table that does not exist on the user database" do
-      reload_user_data(@user) && @user.reload
       initial_count = @user.tables.count
       table = create_table :user_id => @user.id, :name => 'My table 3'
+      puts "dropping", table.name
       @user.in_database.drop_table(table.name)
       @user.tables.where(name: table.name).first.should_not be_nil
       @user.link_ghost_tables
       @user.tables.where(name: table.name).first.should be_nil
-      @user.tables.count.should == initial_count
     end
 
-    it "should not do anything when real tables is blank" do
-      reload_user_data(@user) && @user.reload
-      @user.stubs(:real_tables).returns([])
-      @user.tables.count.should_not == 0
-      @user.link_ghost_tables
-      @user.tables.count.should_not == 0
-    end
   end
 
   describe '#shared_tables' do
@@ -1064,21 +1235,6 @@ describe User do
         u1.destroy
       }.to raise_exception CartoDB::BaseCartoDBError
 
-
-      pending "Until User organization is stabilized, cannot properly delete stuff"
-
-      # Remove non-admin first
-      u2.destroy
-
-      u1.reload
-      org.reload
-      org.users.count.should eq 1
-
-      # And now we can destroy the owner
-      u1.destroy
-
-      org.reload
-      org.users.count.should eq 0
     end
   end
 
@@ -1153,7 +1309,8 @@ describe User do
 
   end
 
-  it "should notify a new user created from a organization" do
+  # INFO: since user can be also created in Central, and it can fail, we need to request notification explicitly. See #3022 for more info 
+  it "can notify a new user creation" do
 
     ::Resque.stubs(:enqueue).returns(nil)
 
@@ -1164,11 +1321,187 @@ describe User do
     ::Resque.expects(:enqueue).with(::Resque::UserJobs::Mail::NewOrganizationUser, user1.id).once
 
     user1.save
+    # INFO: if user must be synched with a remote server it should happen before notifying
+    user1.notify_new_organization_user
 
     organization.destroy
-    #user1.destroy
-    #organization.users.each {|u| u.destroy unless u == organization.owner }
-    #organization.owner.destroy
+  end
+
+  it "Tests password change" do
+    # @user_password = 'admin123'
+    # @user     = create_user :email => 'admin@example.com', :username => 'admin', :password => @user_password
+
+    new_valid_password = '123456'
+
+    old_crypted_password = @user.crypted_password
+
+    @user.change_password('aaabbb', new_valid_password, new_valid_password)
+    @user.valid?.should eq false
+
+    @user.errors.fetch(:old_password).nil?.should eq false
+    expect {
+      @user.save(raise_on_failure: true)
+    }.to raise_exception(Sequel::ValidationFailed, "old_password Old password not valid") # "to_s" of validation msg
+
+    @user.change_password(@user_password, 'aaabbb', 'bbbaaa')
+    @user.valid?.should eq false
+    @user.errors.fetch(:new_password).nil?.should eq false
+    expect {
+      @user.save(raise_on_failure: true)
+    }.to raise_exception(Sequel::ValidationFailed, "new_password New password and confirm password are not the same")
+
+    @user.change_password('aaaaaa', 'aaabbb', 'bbbaaa')
+    @user.valid?.should eq false
+    @user.errors.fetch(:old_password).nil?.should eq false
+    @user.errors.fetch(:new_password).nil?.should eq false
+    expect {
+      @user.save(raise_on_failure: true)
+    }.to raise_exception(Sequel::ValidationFailed, "old_password Old password not valid, new_password New password and confirm password are not the same")
+
+    @user.change_password(@user_password, 'tiny', 'tiny')
+    @user.valid?.should eq false
+    @user.errors.fetch(:new_password).nil?.should eq false
+    expect {
+      @user.save(raise_on_failure: true)
+    }.to raise_exception(Sequel::ValidationFailed, "new_password New password is too short (6 chars min)")
+
+    @user.change_password('aaaaaa', nil, nil)
+    @user.valid?.should eq false
+    @user.errors.fetch(:old_password).nil?.should eq false
+    expect {
+      @user.save(raise_on_failure: true)
+    }.to raise_exception(Sequel::ValidationFailed, "old_password Old password not valid, new_password Missing new password")
+
+    @user.change_password(@user_password, nil, nil)
+    @user.valid?.should eq false
+    @user.errors.fetch(:new_password).nil?.should eq false
+    expect {
+      @user.save(raise_on_failure: true)
+    }.to raise_exception(Sequel::ValidationFailed, "new_password Missing new password")
+
+    @user.change_password(nil, nil, nil)
+    @user.valid?.should eq false
+    @user.errors.fetch(:old_password).nil?.should eq false
+    expect {
+      @user.save(raise_on_failure: true)
+    }.to raise_exception(Sequel::ValidationFailed, "old_password Old password not valid, new_password Missing new password")
+
+    @user.change_password(nil, new_valid_password, new_valid_password)
+    @user.valid?.should eq false
+    @user.errors.fetch(:old_password).nil?.should eq false
+    expect {
+      @user.save(raise_on_failure: true)
+    }.to raise_exception(Sequel::ValidationFailed, "old_password Old password not valid")
+
+
+    @user.change_password(@user_password, new_valid_password, new_valid_password)
+    @user.valid?.should eq true
+    @user.save
+
+    new_crypted_password = @user.crypted_password
+
+    (old_crypted_password != new_crypted_password).should eq true
+
+    @user.change_password(new_valid_password, @user_password, @user_password)
+    @user.valid?.should eq true
+    @user.save
+
+    @user.crypted_password.should eq old_crypted_password
+  end
+
+  describe "when user is signed up with google sign-in and don't have any password yet" do
+    before(:each) do
+      @user.google_sign_in = true
+      @user.last_password_change_date = nil
+      @user.save
+
+      new_valid_password = '123456'
+      @user.change_password("doesn't matter in this case", new_valid_password, new_valid_password)
+    end
+
+    it 'should allow updating password w/o a current password' do
+      @user.valid?.should eq true
+      @user.save
+    end
+
+    it 'should have updated last password change date' do
+      @user.last_password_change_date.should_not eq nil
+      @user.save
+    end
+  end
+
+  describe "#purge_redis_vizjson_cache" do
+    it "shall iterate on the user's visualizations and purge their redis cache" do
+      # Create a few tables with their default vizs
+      (1..3).each do |i|
+        t = Table.new
+        t.user_id = @user.id
+        t.save
+      end
+
+      collection = CartoDB::Visualization::Collection.new.fetch({user_id: @user.id})
+      # Not grabbing https version of keys
+      redis_keys = collection.map(&:redis_vizjson_key)
+      redis_keys.should_not be_empty
+
+      redis_cache_mock = mock
+      redis_cache_mock.expects(:del).once.with(redis_keys)
+      CartoDB::Visualization::Member.expects(:redis_cache).once.returns(redis_cache_mock)
+
+      @user.purge_redis_vizjson_cache
+    end
+
+    it "shall not fail if the user does not have visualizations" do
+      user = create_user
+      collection = CartoDB::Visualization::Collection.new.fetch({user_id: user.id})
+      # 'http' keys
+      redis_keys = collection.map(&:redis_vizjson_key)
+      redis_keys.should be_empty
+      # 'https' keys
+      redis_keys = collection.map { |item| item.redis_vizjson_key(true) }
+      redis_keys.should be_empty
+
+      CartoDB::Visualization::Member.expects(:redis_cache).never
+
+      user.purge_redis_vizjson_cache
+    end
+  end
+
+  describe "#regressions" do
+    it "Tests geocodings and data import FK not breaking user destruction" do
+      user = create_user
+      user_id = user.id
+
+      data_import_id = '11111111-1111-1111-1111-111111111111'
+
+      Rails::Sequel.connection.run(%Q{
+        INSERT INTO data_imports("data_source","data_type","table_name","state","success","logger","updated_at",
+          "created_at","tables_created_count",
+          "table_names","append","id","table_id","user_id",
+          "service_name","service_item_id","stats","type_guessing","quoted_fields_guessing","content_guessing","server","host",
+          "resque_ppid","upload_host","create_visualization","user_defined_limits")
+          VALUES('test','url','test','complete','t','11111111-1111-1111-1111-111111111112',
+            '2015-03-17 00:00:00.94006+00','2015-03-17 00:00:00.810581+00','1',
+            'test','f','#{data_import_id}','11111111-1111-1111-1111-111111111113',
+            '#{user_id}','public_url', 'test',
+            '[{"type":".csv","size":5015}]','t','f','t','test','0.0.0.0','13204','test','f','{"twitter_credits_limit":0}');
+        })
+
+      Rails::Sequel.connection.run(%Q{
+        INSERT INTO geocodings("table_name","processed_rows","created_at","updated_at","formatter","state",
+          "id","user_id",
+          "cache_hits","kind","geometry_type","processable_rows","real_rows","used_credits",
+          "data_import_id"
+          ) VALUES('importer_123456','197','2015-03-17 00:00:00.279934+00','2015-03-17 00:00:00.536383+00','field_1','finished',
+            '11111111-1111-1111-1111-111111111114','#{user_id}','0','admin0','polygon','195','0','0',
+            '#{data_import_id}');
+        })
+
+      user.destroy
+
+      User.find(id:user_id).should eq nil
+
+    end
   end
 
   def create_org(org_name, org_quota, org_seats)
@@ -1181,4 +1514,3 @@ describe User do
   end
 
 end
-

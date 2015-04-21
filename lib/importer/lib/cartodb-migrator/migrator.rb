@@ -107,7 +107,7 @@ module CartoDB
             UPDATE \"#{@suggested_name}\"
             SET the_geom =
               ST_GeomFromText(
-                'POINT(' || trim(\"#{matching_longitude}\") || ' ' || trim(\"#{matching_latitude}\") || ')', 4326
+                'POINT(' || trim(CAST(\"#{matching_longitude}\" AS text)) || ' ' || trim(CAST(\"#{matching_latitude}\" AS text)) || ')', 4326
             )
             WHERE
             trim(CAST(\"#{matching_longitude}\" AS text)) ~ '^(([-+]?(([0-9]|[1-9][0-9]|1[0-7][0-9])(\.[0-9]+)?))|[-+]?180)$'
@@ -170,9 +170,12 @@ module CartoDB
         }
       ]
 
+      sanitization_count = 0
+
       sanitization_map = sanitization_map.inject({}) { |memo, pair|
         if memo.values.include?(pair.last) || correct_columns.include?(pair.last)
-          memo.merge(pair.first => "#{pair.last}_1")
+          sanitization_count += 1 
+          memo.merge(pair.first => "#{pair.last}_#{sanitization_count}")
         else
           memo.merge(pair.first => pair.last)
         end

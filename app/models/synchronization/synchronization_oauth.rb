@@ -21,6 +21,8 @@ class SynchronizationOauth < Sequel::Model
   def validate
     super
 
+    validates_presence :token
+
     if new?
       existing_oauth = SynchronizationOauth.filter(
           user_id:  user_id,
@@ -46,7 +48,7 @@ class SynchronizationOauth < Sequel::Model
 
 
   def get_service_datasource
-    datasource = CartoDB::Datasources::DatasourcesFactory.get_datasource(service, User.where(id: user_id))
+    datasource = CartoDB::Datasources::DatasourcesFactory.get_datasource(service, User.where(id: user_id).first)
     datasource.token = token unless datasource.nil?
     datasource
   end #get_service_datasource

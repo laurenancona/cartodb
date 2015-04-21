@@ -6,18 +6,32 @@ class Api::ApplicationController < ApplicationController
 
   protected
 
+  # This only allows to authenticate if sending an API request to username.api_key subdomain,
+  # but doesn't breaks the request if can't authenticate
+  def optional_api_authorization
+    if params[:api_key].present?
+      authenticate(:api_key, :api_authentication, :scope => CartoDB.extract_subdomain(request))
+    end
+  end
+
   def set_start_time
     @time_start = Time.now
   end
 
   # dry up the jsonp output
-  def render_jsonp obj, status = 200, options = {}
-    options.reverse_merge! :json => obj, :status => status, :callback => params[:callback]
+  def render_jsonp(obj, status = 200, options = {})
+    if callback_valid?
+      options.reverse_merge! :json => obj, :status => status, :callback => params[:callback]
+    else
+      options.reverse_merge! :json => { errors: { callback: "Invalid callback format" } }, :status => 400
+    end
     render options
   end
 
-  def link_ghost_tables
-    return true unless current_user.present?
-    current_user.link_ghost_tables
+  private
+
+  def callback_valid?
+    # While only checks basic characters, represents most common use of JS function names
+    params[:callback].nil?  || !!(params[:callback] =~ /^[$a-z_][0-9a-z_$]*$/i)
   end
 end

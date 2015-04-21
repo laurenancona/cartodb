@@ -35,6 +35,8 @@ module CartoDB
 
     attr_accessor :input_file
 
+    class ServiceDisabled < StandardError; end
+
     def initialize(arguments)
       @input_file         = arguments[:input_file]
       @base_url           = arguments[:base_url]
@@ -45,6 +47,11 @@ module CartoDB
       @mailto             = arguments.fetch(:mailto)
       @force_batch        = arguments[:force_batch] || false
       @dir                = arguments[:dir] || Dir.mktmpdir
+      begin
+        @batch_api_disabled = Cartodb.config[:geocoder]['batch_api_disabled'] == true
+      rescue
+        @batch_api_disabled = false
+      end
     end # initialize
 
     def use_batch_process?
@@ -60,6 +67,7 @@ module CartoDB
 
     def upload
       return run_non_batched unless use_batch_process?
+      assert_batch_api_enabled
       response = Typhoeus.post(
         api_url(UPLOAD_OPTIONS),
         body: File.open(input_file,"r").read,
@@ -67,10 +75,11 @@ module CartoDB
       )
       handle_api_error(response)
       @request_id = extract_response_field(response.body)
-    end # upload
+    end
 
     def cancel
       return unless use_batch_process?
+      assert_batch_api_enabled
       response = Typhoeus.put api_url(action: 'cancel')
       handle_api_error(response)
       @status         = extract_response_field(response.body, '//Response/Status')
@@ -80,6 +89,7 @@ module CartoDB
 
     def delete
       return unless use_batch_process?
+      assert_batch_api_enabled
       response = Typhoeus.delete api_url({})
       handle_api_error(response)
       @status         = extract_response_field(response.body, '//Response/Status')
@@ -89,12 +99,17 @@ module CartoDB
 
     def update_status
       return unless use_batch_process?
+      assert_batch_api_enabled
       response = Typhoeus.get api_url(action: 'status')
       handle_api_error(response)
       @status         = extract_response_field(response.body, '//Response/Status')
       @processed_rows = extract_response_field(response.body, '//Response/ProcessedCount')
       @total_rows     = extract_response_field(response.body, '//Response/TotalCount')
     end # update_status
+
+    def assert_batch_api_enabled
+      raise ServiceDisabled if @batch_api_disabled
+    end
 
     def result
       return @result unless @result.nil?
@@ -118,7 +133,7 @@ module CartoDB
       csv.close
       @status = 'completed'
       @request_id = UUIDTools::UUID.timestamp_create.to_s.gsub('-', '')
-    end # run_non_batched
+    end
 
     def geocode_text(text)
       options = GEOCODER_OPTIONS.merge(searchtext: text, app_id: app_id, app_code: token)
@@ -127,6 +142,7 @@ module CartoDB
       position = response["view"][0]["result"][0]["location"]["displayPosition"]
       return position["latitude"], position["longitude"]
     rescue => e
+      Rollbar.report_exception(e)
       [nil, nil]
     end
 

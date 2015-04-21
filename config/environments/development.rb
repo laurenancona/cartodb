@@ -3,6 +3,9 @@
 CartoDB::Application.configure do
   # Settings specified here will take precedence over those in config/application.rb
 
+  # ActiveSupport::Dependencies.autoload_paths << File::join( Rails.root, 'lib')
+  # ActiveSupport::Dependencies.autoload_paths << File::join( Rails.root, 'lib/central')
+
   # The production environment is meant for finished, "live" apps.
   # Code is not reloaded between requests
   config.cache_classes = false
@@ -21,7 +24,7 @@ CartoDB::Application.configure do
   # just comment this out and Rails will serve the files
 
   # See everything in the log (default is :info)
-  config.log_level = :info
+  config.log_level = :debug
 
   # Use a different logger for distributed setups
   # config.logger = SyslogLogger.new

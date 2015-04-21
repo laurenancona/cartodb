@@ -1,6 +1,6 @@
-// cartodb.js version: 3.11.05-dev
+// cartodb.js version: 3.14.0
 // uncompressed version: cartodb.uncompressed.js
-// sha: 24ad42067b0fc263c28e5eb33c59d5f0d8e09227
+// sha: 101959f7e5d7a89391a61995c27dc407cca47bff
 (function() {
   var root = this;
 
@@ -1942,6 +1942,591 @@ if (typeof JSON !== 'object') {
   };
 
 }).call(this);
+/*!
+ * mustache.js - Logic-less {{mustache}} templates with JavaScript
+ * http://github.com/janl/mustache.js
+ */
+
+/*global define: false*/
+
+(function (global, factory) {
+  if (typeof exports === "object" && exports) {
+    factory(exports); // CommonJS
+  } else if (typeof define === "function" && define.amd) {
+    define(['exports'], factory); // AMD
+  } else {
+    factory(global.Mustache = {}); // <script>
+  }
+}(this, function (mustache) {
+
+  var Object_toString = Object.prototype.toString;
+  var isArray = Array.isArray || function (object) {
+    return Object_toString.call(object) === '[object Array]';
+  };
+
+  function isFunction(object) {
+    return typeof object === 'function';
+  }
+
+  function escapeRegExp(string) {
+    return string.replace(/[\-\[\]{}()*+?.,\\\^$|#\s]/g, "\\$&");
+  }
+
+  // Workaround for https://issues.apache.org/jira/browse/COUCHDB-577
+  // See https://github.com/janl/mustache.js/issues/189
+  var RegExp_test = RegExp.prototype.test;
+  function testRegExp(re, string) {
+    return RegExp_test.call(re, string);
+  }
+
+  var nonSpaceRe = /\S/;
+  function isWhitespace(string) {
+    return !testRegExp(nonSpaceRe, string);
+  }
+
+  var entityMap = {
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': '&quot;',
+    "'": '&#39;',
+    "/": '&#x2F;'
+  };
+
+  function escapeHtml(string) {
+    return String(string).replace(/[&<>"'\/]/g, function (s) {
+      return entityMap[s];
+    });
+  }
+
+  var whiteRe = /\s*/;
+  var spaceRe = /\s+/;
+  var equalsRe = /\s*=/;
+  var curlyRe = /\s*\}/;
+  var tagRe = /#|\^|\/|>|\{|&|=|!/;
+
+  /**
+   * Breaks up the given `template` string into a tree of tokens. If the `tags`
+   * argument is given here it must be an array with two string values: the
+   * opening and closing tags used in the template (e.g. [ "<%", "%>" ]). Of
+   * course, the default is to use mustaches (i.e. mustache.tags).
+   *
+   * A token is an array with at least 4 elements. The first element is the
+   * mustache symbol that was used inside the tag, e.g. "#" or "&". If the tag
+   * did not contain a symbol (i.e. {{myValue}}) this element is "name". For
+   * all text that appears outside a symbol this element is "text".
+   *
+   * The second element of a token is its "value". For mustache tags this is
+   * whatever else was inside the tag besides the opening symbol. For text tokens
+   * this is the text itself.
+   *
+   * The third and fourth elements of the token are the start and end indices,
+   * respectively, of the token in the original template.
+   *
+   * Tokens that are the root node of a subtree contain two more elements: 1) an
+   * array of tokens in the subtree and 2) the index in the original template at
+   * which the closing tag for that section begins.
+   */
+  function parseTemplate(template, tags) {
+    if (!template)
+      return [];
+
+    var sections = [];     // Stack to hold section tokens
+    var tokens = [];       // Buffer to hold the tokens
+    var spaces = [];       // Indices of whitespace tokens on the current line
+    var hasTag = false;    // Is there a {{tag}} on the current line?
+    var nonSpace = false;  // Is there a non-space char on the current line?
+
+    // Strips all whitespace tokens array for the current line
+    // if there was a {{#tag}} on it and otherwise only space.
+    function stripSpace() {
+      if (hasTag && !nonSpace) {
+        while (spaces.length)
+          delete tokens[spaces.pop()];
+      } else {
+        spaces = [];
+      }
+
+      hasTag = false;
+      nonSpace = false;
+    }
+
+    var openingTagRe, closingTagRe, closingCurlyRe;
+    function compileTags(tags) {
+      if (typeof tags === 'string')
+        tags = tags.split(spaceRe, 2);
+
+      if (!isArray(tags) || tags.length !== 2)
+        throw new Error('Invalid tags: ' + tags);
+
+      openingTagRe = new RegExp(escapeRegExp(tags[0]) + '\\s*');
+      closingTagRe = new RegExp('\\s*' + escapeRegExp(tags[1]));
+      closingCurlyRe = new RegExp('\\s*' + escapeRegExp('}' + tags[1]));
+    }
+
+    compileTags(tags || mustache.tags);
+
+    var scanner = new Scanner(template);
+
+    var start, type, value, chr, token, openSection;
+    while (!scanner.eos()) {
+      start = scanner.pos;
+
+      // Match any text between tags.
+      value = scanner.scanUntil(openingTagRe);
+
+      if (value) {
+        for (var i = 0, valueLength = value.length; i < valueLength; ++i) {
+          chr = value.charAt(i);
+
+          if (isWhitespace(chr)) {
+            spaces.push(tokens.length);
+          } else {
+            nonSpace = true;
+          }
+
+          tokens.push([ 'text', chr, start, start + 1 ]);
+          start += 1;
+
+          // Check for whitespace on the current line.
+          if (chr === '\n')
+            stripSpace();
+        }
+      }
+
+      // Match the opening tag.
+      if (!scanner.scan(openingTagRe))
+        break;
+
+      hasTag = true;
+
+      // Get the tag type.
+      type = scanner.scan(tagRe) || 'name';
+      scanner.scan(whiteRe);
+
+      // Get the tag value.
+      if (type === '=') {
+        value = scanner.scanUntil(equalsRe);
+        scanner.scan(equalsRe);
+        scanner.scanUntil(closingTagRe);
+      } else if (type === '{') {
+        value = scanner.scanUntil(closingCurlyRe);
+        scanner.scan(curlyRe);
+        scanner.scanUntil(closingTagRe);
+        type = '&';
+      } else {
+        value = scanner.scanUntil(closingTagRe);
+      }
+
+      // Match the closing tag.
+      if (!scanner.scan(closingTagRe))
+        throw new Error('Unclosed tag at ' + scanner.pos);
+
+      token = [ type, value, start, scanner.pos ];
+      tokens.push(token);
+
+      if (type === '#' || type === '^') {
+        sections.push(token);
+      } else if (type === '/') {
+        // Check section nesting.
+        openSection = sections.pop();
+
+        if (!openSection)
+          throw new Error('Unopened section "' + value + '" at ' + start);
+
+        if (openSection[1] !== value)
+          throw new Error('Unclosed section "' + openSection[1] + '" at ' + start);
+      } else if (type === 'name' || type === '{' || type === '&') {
+        nonSpace = true;
+      } else if (type === '=') {
+        // Set the tags for the next time around.
+        compileTags(value);
+      }
+    }
+
+    // Make sure there are no open sections when we're done.
+    openSection = sections.pop();
+
+    if (openSection)
+      throw new Error('Unclosed section "' + openSection[1] + '" at ' + scanner.pos);
+
+    return nestTokens(squashTokens(tokens));
+  }
+
+  /**
+   * Combines the values of consecutive text tokens in the given `tokens` array
+   * to a single token.
+   */
+  function squashTokens(tokens) {
+    var squashedTokens = [];
+
+    var token, lastToken;
+    for (var i = 0, numTokens = tokens.length; i < numTokens; ++i) {
+      token = tokens[i];
+
+      if (token) {
+        if (token[0] === 'text' && lastToken && lastToken[0] === 'text') {
+          lastToken[1] += token[1];
+          lastToken[3] = token[3];
+        } else {
+          squashedTokens.push(token);
+          lastToken = token;
+        }
+      }
+    }
+
+    return squashedTokens;
+  }
+
+  /**
+   * Forms the given array of `tokens` into a nested tree structure where
+   * tokens that represent a section have two additional items: 1) an array of
+   * all tokens that appear in that section and 2) the index in the original
+   * template that represents the end of that section.
+   */
+  function nestTokens(tokens) {
+    var nestedTokens = [];
+    var collector = nestedTokens;
+    var sections = [];
+
+    var token, section;
+    for (var i = 0, numTokens = tokens.length; i < numTokens; ++i) {
+      token = tokens[i];
+
+      switch (token[0]) {
+      case '#':
+      case '^':
+        collector.push(token);
+        sections.push(token);
+        collector = token[4] = [];
+        break;
+      case '/':
+        section = sections.pop();
+        section[5] = token[2];
+        collector = sections.length > 0 ? sections[sections.length - 1][4] : nestedTokens;
+        break;
+      default:
+        collector.push(token);
+      }
+    }
+
+    return nestedTokens;
+  }
+
+  /**
+   * A simple string scanner that is used by the template parser to find
+   * tokens in template strings.
+   */
+  function Scanner(string) {
+    this.string = string;
+    this.tail = string;
+    this.pos = 0;
+  }
+
+  /**
+   * Returns `true` if the tail is empty (end of string).
+   */
+  Scanner.prototype.eos = function () {
+    return this.tail === "";
+  };
+
+  /**
+   * Tries to match the given regular expression at the current position.
+   * Returns the matched text if it can match, the empty string otherwise.
+   */
+  Scanner.prototype.scan = function (re) {
+    var match = this.tail.match(re);
+
+    if (!match || match.index !== 0)
+      return '';
+
+    var string = match[0];
+
+    this.tail = this.tail.substring(string.length);
+    this.pos += string.length;
+
+    return string;
+  };
+
+  /**
+   * Skips all text until the given regular expression can be matched. Returns
+   * the skipped string, which is the entire tail if no match can be made.
+   */
+  Scanner.prototype.scanUntil = function (re) {
+    var index = this.tail.search(re), match;
+
+    switch (index) {
+    case -1:
+      match = this.tail;
+      this.tail = "";
+      break;
+    case 0:
+      match = "";
+      break;
+    default:
+      match = this.tail.substring(0, index);
+      this.tail = this.tail.substring(index);
+    }
+
+    this.pos += match.length;
+
+    return match;
+  };
+
+  /**
+   * Represents a rendering context by wrapping a view object and
+   * maintaining a reference to the parent context.
+   */
+  function Context(view, parentContext) {
+    this.view = view == null ? {} : view;
+    this.cache = { '.': this.view };
+    this.parent = parentContext;
+  }
+
+  /**
+   * Creates a new context using the given view with this context
+   * as the parent.
+   */
+  Context.prototype.push = function (view) {
+    return new Context(view, this);
+  };
+
+  /**
+   * Returns the value of the given name in this context, traversing
+   * up the context hierarchy if the value is absent in this context's view.
+   */
+  Context.prototype.lookup = function (name) {
+    var cache = this.cache;
+
+    var value;
+    if (name in cache) {
+      value = cache[name];
+    } else {
+      var context = this, names, index;
+
+      while (context) {
+        if (name.indexOf('.') > 0) {
+          value = context.view;
+          names = name.split('.');
+          index = 0;
+
+          while (value != null && index < names.length)
+            value = value[names[index++]];
+        } else if (typeof context.view == 'object') {
+          value = context.view[name];
+        }
+
+        if (value != null)
+          break;
+
+        context = context.parent;
+      }
+
+      cache[name] = value;
+    }
+
+    if (isFunction(value))
+      value = value.call(this.view);
+
+    return value;
+  };
+
+  /**
+   * A Writer knows how to take a stream of tokens and render them to a
+   * string, given a context. It also maintains a cache of templates to
+   * avoid the need to parse the same template twice.
+   */
+  function Writer() {
+    this.cache = {};
+  }
+
+  /**
+   * Clears all cached templates in this writer.
+   */
+  Writer.prototype.clearCache = function () {
+    this.cache = {};
+  };
+
+  /**
+   * Parses and caches the given `template` and returns the array of tokens
+   * that is generated from the parse.
+   */
+  Writer.prototype.parse = function (template, tags) {
+    var cache = this.cache;
+    var tokens = cache[template];
+
+    if (tokens == null)
+      tokens = cache[template] = parseTemplate(template, tags);
+
+    return tokens;
+  };
+
+  /**
+   * High-level method that is used to render the given `template` with
+   * the given `view`.
+   *
+   * The optional `partials` argument may be an object that contains the
+   * names and templates of partials that are used in the template. It may
+   * also be a function that is used to load partial templates on the fly
+   * that takes a single argument: the name of the partial.
+   */
+  Writer.prototype.render = function (template, view, partials) {
+    var tokens = this.parse(template);
+    var context = (view instanceof Context) ? view : new Context(view);
+    return this.renderTokens(tokens, context, partials, template);
+  };
+
+  /**
+   * Low-level method that renders the given array of `tokens` using
+   * the given `context` and `partials`.
+   *
+   * Note: The `originalTemplate` is only ever used to extract the portion
+   * of the original template that was contained in a higher-order section.
+   * If the template doesn't use higher-order sections, this argument may
+   * be omitted.
+   */
+  Writer.prototype.renderTokens = function (tokens, context, partials, originalTemplate) {
+    var buffer = '';
+
+    var token, symbol, value;
+    for (var i = 0, numTokens = tokens.length; i < numTokens; ++i) {
+      value = undefined;
+      token = tokens[i];
+      symbol = token[0];
+
+      if (symbol === '#') value = this._renderSection(token, context, partials, originalTemplate);
+      else if (symbol === '^') value = this._renderInverted(token, context, partials, originalTemplate);
+      else if (symbol === '>') value = this._renderPartial(token, context, partials, originalTemplate);
+      else if (symbol === '&') value = this._unescapedValue(token, context);
+      else if (symbol === 'name') value = this._escapedValue(token, context);
+      else if (symbol === 'text') value = this._rawValue(token);
+
+      if (value !== undefined)
+        buffer += value;
+    }
+
+    return buffer;
+  };
+
+  Writer.prototype._renderSection = function (token, context, partials, originalTemplate) {
+    var self = this;
+    var buffer = '';
+    var value = context.lookup(token[1]);
+
+    // This function is used to render an arbitrary template
+    // in the current context by higher-order sections.
+    function subRender(template) {
+      return self.render(template, context, partials);
+    }
+
+    if (!value) return;
+
+    if (isArray(value)) {
+      for (var j = 0, valueLength = value.length; j < valueLength; ++j) {
+        buffer += this.renderTokens(token[4], context.push(value[j]), partials, originalTemplate);
+      }
+    } else if (typeof value === 'object' || typeof value === 'string') {
+      buffer += this.renderTokens(token[4], context.push(value), partials, originalTemplate);
+    } else if (isFunction(value)) {
+      if (typeof originalTemplate !== 'string')
+        throw new Error('Cannot use higher-order sections without the original template');
+
+      // Extract the portion of the original template that the section contains.
+      value = value.call(context.view, originalTemplate.slice(token[3], token[5]), subRender);
+
+      if (value != null)
+        buffer += value;
+    } else {
+      buffer += this.renderTokens(token[4], context, partials, originalTemplate);
+    }
+    return buffer;
+  };
+
+  Writer.prototype._renderInverted = function(token, context, partials, originalTemplate) {
+    var value = context.lookup(token[1]);
+
+    // Use JavaScript's definition of falsy. Include empty arrays.
+    // See https://github.com/janl/mustache.js/issues/186
+    if (!value || (isArray(value) && value.length === 0))
+      return this.renderTokens(token[4], context, partials, originalTemplate);
+  };
+
+  Writer.prototype._renderPartial = function(token, context, partials) {
+    if (!partials) return;
+
+    var value = isFunction(partials) ? partials(token[1]) : partials[token[1]];
+    if (value != null)
+      return this.renderTokens(this.parse(value), context, partials, value);
+  };
+
+  Writer.prototype._unescapedValue = function(token, context) {
+    var value = context.lookup(token[1]);
+    if (value != null)
+      return value;
+  };
+
+  Writer.prototype._escapedValue = function(token, context) {
+    var value = context.lookup(token[1]);
+    if (value != null)
+      return mustache.escape(value);
+  };
+
+  Writer.prototype._rawValue = function(token) {
+    return token[1];
+  };
+
+  mustache.name = "mustache.js";
+  mustache.version = "1.1.0";
+  mustache.tags = [ "{{", "}}" ];
+
+  // All high-level mustache.* functions use this writer.
+  var defaultWriter = new Writer();
+
+  /**
+   * Clears all cached templates in the default writer.
+   */
+  mustache.clearCache = function () {
+    return defaultWriter.clearCache();
+  };
+
+  /**
+   * Parses and caches the given template in the default writer and returns the
+   * array of tokens it contains. Doing this ahead of time avoids the need to
+   * parse templates on the fly as they are rendered.
+   */
+  mustache.parse = function (template, tags) {
+    return defaultWriter.parse(template, tags);
+  };
+
+  /**
+   * Renders the `template` with the given `view` and `partials` using the
+   * default writer.
+   */
+  mustache.render = function (template, view, partials) {
+    return defaultWriter.render(template, view, partials);
+  };
+
+  // This is here for backwards compatibility with 0.4.x.
+  mustache.to_html = function (template, view, partials, send) {
+    var result = mustache.render(template, view, partials);
+
+    if (isFunction(send)) {
+      send(result);
+    } else {
+      return result;
+    }
+  };
+
+  // Export the escaping function so that the user may override it.
+  // See https://github.com/janl/mustache.js/issues/244
+  mustache.escape = escapeHtml;
+
+  // Export these mainly for testing, but also for advanced usage.
+  mustache.Scanner = Scanner;
+  mustache.Context = Context;
+  mustache.Writer = Writer;
+
+}));
 /*
  Leaflet, a JavaScript library for mobile-friendly interactive maps. http://leafletjs.com
  (c) 2010-2013, Vladimir Agafonkin
@@ -11122,7 +11707,7 @@ L.Map.include({
 
 
 }(window, document));
-/* wax - 7.0.0dev10 - v6.0.4-154-ge12d473 */
+/* wax - 7.1.0 - v6.0.4-177-g1f244ba */
 
 
 !function (name, context, definition) {
@@ -11172,6 +11757,7 @@ L.Map.include({
             'gesturestart gesturechange gestureend ' +                         // gesture
             'MSPointerUp MSPointerDown MSPointerCancel MSPointerMove ' +       // MS Pointer events
             'MSPointerOver MSPointerOut ' +                                    // MS Pointer events
+            'pointerup pointerdown pointermove pointercancel' +                // MS Pointer events
             'message readystatechange pageshow pagehide popstate ' +           // window
             'hashchange offline online ' +                                     // window
             'afterprint beforeprint ' +                                        // printing
@@ -12610,543 +13196,6 @@ html4.ATTRIBS['audio::src'] = 0;
 html4.ATTRIBS['video::autoplay'] = 0;
 html4.ATTRIBS['video::controls'] = 0;
 /*!
- * mustache.js - Logic-less {{mustache}} templates with JavaScript
- * http://github.com/janl/mustache.js
- */
-var Mustache = (typeof module !== "undefined" && module.exports) || {};
-
-(function (exports) {
-
-  exports.name = "mustache.js";
-  exports.version = "0.5.0-dev";
-  exports.tags = ["{{", "}}"];
-  exports.parse = parse;
-  exports.compile = compile;
-  exports.render = render;
-  exports.clearCache = clearCache;
-
-  // This is here for backwards compatibility with 0.4.x.
-  exports.to_html = function (template, view, partials, send) {
-    var result = render(template, view, partials);
-
-    if (typeof send === "function") {
-      send(result);
-    } else {
-      return result;
-    }
-  };
-
-  var _toString = Object.prototype.toString;
-  var _isArray = Array.isArray;
-  var _forEach = Array.prototype.forEach;
-  var _trim = String.prototype.trim;
-
-  var isArray;
-  if (_isArray) {
-    isArray = _isArray;
-  } else {
-    isArray = function (obj) {
-      return _toString.call(obj) === "[object Array]";
-    };
-  }
-
-  var forEach;
-  if (_forEach) {
-    forEach = function (obj, callback, scope) {
-      return _forEach.call(obj, callback, scope);
-    };
-  } else {
-    forEach = function (obj, callback, scope) {
-      for (var i = 0, len = obj.length; i < len; ++i) {
-        callback.call(scope, obj[i], i, obj);
-      }
-    };
-  }
-
-  var spaceRe = /^\s*$/;
-
-  function isWhitespace(string) {
-    return spaceRe.test(string);
-  }
-
-  var trim;
-  if (_trim) {
-    trim = function (string) {
-      return string == null ? "" : _trim.call(string);
-    };
-  } else {
-    var trimLeft, trimRight;
-
-    if (isWhitespace("\xA0")) {
-      trimLeft = /^\s+/;
-      trimRight = /\s+$/;
-    } else {
-      // IE doesn't match non-breaking spaces with \s, thanks jQuery.
-      trimLeft = /^[\s\xA0]+/;
-      trimRight = /[\s\xA0]+$/;
-    }
-
-    trim = function (string) {
-      return string == null ? "" :
-        String(string).replace(trimLeft, "").replace(trimRight, "");
-    };
-  }
-
-  var escapeMap = {
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    '"': '&quot;',
-    "'": '&#39;',
-    "/": '&#x2F;'
-  };
-
-  function escapeHTML(string) {
-    return String(string).replace(/[&<>"'\/]/g, function (s) {
-      return escapeMap[s] || s;
-    });
-  }
-
-  /**
-   * Adds the `template`, `line`, and `file` properties to the given error
-   * object and alters the message to provide more useful debugging information.
-   */
-  function debug(e, template, line, file) {
-    file = file || "<template>";
-
-    var lines = template.split("\n"),
-        start = Math.max(line - 3, 0),
-        end = Math.min(lines.length, line + 3),
-        context = lines.slice(start, end);
-
-    var c;
-    for (var i = 0, len = context.length; i < len; ++i) {
-      c = i + start + 1;
-      context[i] = (c === line ? " >> " : "    ") + context[i];
-    }
-
-    e.template = template;
-    e.line = line;
-    e.file = file;
-    e.message = [file + ":" + line, context.join("\n"), "", e.message].join("\n");
-
-    return e;
-  }
-
-  /**
-   * Looks up the value of the given `name` in the given context `stack`.
-   */
-  function lookup(name, stack, defaultValue) {
-    if (name === ".") {
-      return stack[stack.length - 1];
-    }
-
-    var names = name.split(".");
-    var lastIndex = names.length - 1;
-    var target = names[lastIndex];
-
-    var value, context, i = stack.length, j, localStack;
-    while (i) {
-      localStack = stack.slice(0);
-      context = stack[--i];
-
-      j = 0;
-      while (j < lastIndex) {
-        context = context[names[j++]];
-
-        if (context == null) {
-          break;
-        }
-
-        localStack.push(context);
-      }
-
-      if (context && typeof context === "object" && target in context) {
-        value = context[target];
-        break;
-      }
-    }
-
-    // If the value is a function, call it in the current context.
-    if (typeof value === "function") {
-      value = value.call(localStack[localStack.length - 1]);
-    }
-
-    if (value == null)  {
-      return defaultValue;
-    }
-
-    return value;
-  }
-
-  function renderSection(name, stack, callback, inverted) {
-    var buffer = "";
-    var value =  lookup(name, stack);
-
-    if (inverted) {
-      // From the spec: inverted sections may render text once based on the
-      // inverse value of the key. That is, they will be rendered if the key
-      // doesn't exist, is false, or is an empty list.
-      if (value == null || value === false || (isArray(value) && value.length === 0)) {
-        buffer += callback();
-      }
-    } else if (isArray(value)) {
-      forEach(value, function (value) {
-        stack.push(value);
-        buffer += callback();
-        stack.pop();
-      });
-    } else if (typeof value === "object") {
-      stack.push(value);
-      buffer += callback();
-      stack.pop();
-    } else if (typeof value === "function") {
-      var scope = stack[stack.length - 1];
-      var scopedRender = function (template) {
-        return render(template, scope);
-      };
-      buffer += value.call(scope, callback(), scopedRender) || "";
-    } else if (value) {
-      buffer += callback();
-    }
-
-    return buffer;
-  }
-
-  /**
-   * Parses the given `template` and returns the source of a function that,
-   * with the proper arguments, will render the template. Recognized options
-   * include the following:
-   *
-   *   - file     The name of the file the template comes from (displayed in
-   *              error messages)
-   *   - tags     An array of open and close tags the `template` uses. Defaults
-   *              to the value of Mustache.tags
-   *   - debug    Set `true` to log the body of the generated function to the
-   *              console
-   *   - space    Set `true` to preserve whitespace from lines that otherwise
-   *              contain only a {{tag}}. Defaults to `false`
-   */
-  function parse(template, options) {
-    options = options || {};
-
-    var tags = options.tags || exports.tags,
-        openTag = tags[0],
-        closeTag = tags[tags.length - 1];
-
-    var code = [
-      'var buffer = "";', // output buffer
-      "\nvar line = 1;", // keep track of source line number
-      "\ntry {",
-      '\nbuffer += "'
-    ];
-
-    var spaces = [],      // indices of whitespace in code on the current line
-        hasTag = false,   // is there a {{tag}} on the current line?
-        nonSpace = false; // is there a non-space char on the current line?
-
-    // Strips all space characters from the code array for the current line
-    // if there was a {{tag}} on it and otherwise only spaces.
-    var stripSpace = function () {
-      if (hasTag && !nonSpace && !options.space) {
-        while (spaces.length) {
-          code.splice(spaces.pop(), 1);
-        }
-      } else {
-        spaces = [];
-      }
-
-      hasTag = false;
-      nonSpace = false;
-    };
-
-    var sectionStack = [], updateLine, nextOpenTag, nextCloseTag;
-
-    var setTags = function (source) {
-      tags = trim(source).split(/\s+/);
-      nextOpenTag = tags[0];
-      nextCloseTag = tags[tags.length - 1];
-    };
-
-    var includePartial = function (source) {
-      code.push(
-        '";',
-        updateLine,
-        '\nvar partial = partials["' + trim(source) + '"];',
-        '\nif (partial) {',
-        '\n  buffer += render(partial,stack[stack.length - 1],partials);',
-        '\n}',
-        '\nbuffer += "'
-      );
-    };
-
-    var openSection = function (source, inverted) {
-      var name = trim(source);
-
-      if (name === "") {
-        throw debug(new Error("Section name may not be empty"), template, line, options.file);
-      }
-
-      sectionStack.push({name: name, inverted: inverted});
-
-      code.push(
-        '";',
-        updateLine,
-        '\nvar name = "' + name + '";',
-        '\nvar callback = (function () {',
-        '\n  return function () {',
-        '\n    var buffer = "";',
-        '\nbuffer += "'
-      );
-    };
-
-    var openInvertedSection = function (source) {
-      openSection(source, true);
-    };
-
-    var closeSection = function (source) {
-      var name = trim(source);
-      var openName = sectionStack.length != 0 && sectionStack[sectionStack.length - 1].name;
-
-      if (!openName || name != openName) {
-        throw debug(new Error('Section named "' + name + '" was never opened'), template, line, options.file);
-      }
-
-      var section = sectionStack.pop();
-
-      code.push(
-        '";',
-        '\n    return buffer;',
-        '\n  };',
-        '\n})();'
-      );
-
-      if (section.inverted) {
-        code.push("\nbuffer += renderSection(name,stack,callback,true);");
-      } else {
-        code.push("\nbuffer += renderSection(name,stack,callback);");
-      }
-
-      code.push('\nbuffer += "');
-    };
-
-    var sendPlain = function (source) {
-      code.push(
-        '";',
-        updateLine,
-        '\nbuffer += lookup("' + trim(source) + '",stack,"");',
-        '\nbuffer += "'
-      );
-    };
-
-    var sendEscaped = function (source) {
-      code.push(
-        '";',
-        updateLine,
-        '\nbuffer += escapeHTML(lookup("' + trim(source) + '",stack,""));',
-        '\nbuffer += "'
-      );
-    };
-
-    var line = 1, c, callback;
-    for (var i = 0, len = template.length; i < len; ++i) {
-      if (template.slice(i, i + openTag.length) === openTag) {
-        i += openTag.length;
-        c = template.substr(i, 1);
-        updateLine = '\nline = ' + line + ';';
-        nextOpenTag = openTag;
-        nextCloseTag = closeTag;
-        hasTag = true;
-
-        switch (c) {
-        case "!": // comment
-          i++;
-          callback = null;
-          break;
-        case "=": // change open/close tags, e.g. {{=<% %>=}}
-          i++;
-          closeTag = "=" + closeTag;
-          callback = setTags;
-          break;
-        case ">": // include partial
-          i++;
-          callback = includePartial;
-          break;
-        case "#": // start section
-          i++;
-          callback = openSection;
-          break;
-        case "^": // start inverted section
-          i++;
-          callback = openInvertedSection;
-          break;
-        case "/": // end section
-          i++;
-          callback = closeSection;
-          break;
-        case "{": // plain variable
-          closeTag = "}" + closeTag;
-          // fall through
-        case "&": // plain variable
-          i++;
-          nonSpace = true;
-          callback = sendPlain;
-          break;
-        default: // escaped variable
-          nonSpace = true;
-          callback = sendEscaped;
-        }
-
-        var end = template.indexOf(closeTag, i);
-
-        if (end === -1) {
-          throw debug(new Error('Tag "' + openTag + '" was not closed properly'), template, line, options.file);
-        }
-
-        var source = template.substring(i, end);
-
-        if (callback) {
-          callback(source);
-        }
-
-        // Maintain line count for \n in source.
-        var n = 0;
-        while (~(n = source.indexOf("\n", n))) {
-          line++;
-          n++;
-        }
-
-        i = end + closeTag.length - 1;
-        openTag = nextOpenTag;
-        closeTag = nextCloseTag;
-      } else {
-        c = template.substr(i, 1);
-
-        switch (c) {
-        case '"':
-        case "\\":
-          nonSpace = true;
-          code.push("\\" + c);
-          break;
-        case "\r":
-          // Ignore carriage returns.
-          break;
-        case "\n":
-          spaces.push(code.length);
-          code.push("\\n");
-          stripSpace(); // Check for whitespace on the current line.
-          line++;
-          break;
-        default:
-          if (isWhitespace(c)) {
-            spaces.push(code.length);
-          } else {
-            nonSpace = true;
-          }
-
-          code.push(c);
-        }
-      }
-    }
-
-    if (sectionStack.length != 0) {
-      throw debug(new Error('Section "' + sectionStack[sectionStack.length - 1].name + '" was not closed properly'), template, line, options.file);
-    }
-
-    // Clean up any whitespace from a closing {{tag}} that was at the end
-    // of the template without a trailing \n.
-    stripSpace();
-
-    code.push(
-      '";',
-      "\nreturn buffer;",
-      "\n} catch (e) { throw {error: e, line: line}; }"
-    );
-
-    // Ignore `buffer += "";` statements.
-    var body = code.join("").replace(/buffer \+= "";\n/g, "");
-
-    if (options.debug) {
-      if (typeof console != "undefined" && console.log) {
-        console.log(body);
-      } else if (typeof print === "function") {
-        print(body);
-      }
-    }
-
-    return body;
-  }
-
-  /**
-   * Used by `compile` to generate a reusable function for the given `template`.
-   */
-  function _compile(template, options) {
-    var args = "view,partials,stack,lookup,escapeHTML,renderSection,render";
-    var body = parse(template, options);
-    var fn = new Function(args, body);
-
-    // This anonymous function wraps the generated function so we can do
-    // argument coercion, setup some variables, and handle any errors
-    // encountered while executing it.
-    return function (view, partials) {
-      partials = partials || {};
-
-      var stack = [view]; // context stack
-
-      try {
-        return fn(view, partials, stack, lookup, escapeHTML, renderSection, render);
-      } catch (e) {
-        throw debug(e.error, template, e.line, options.file);
-      }
-    };
-  }
-
-  // Cache of pre-compiled templates.
-  var _cache = {};
-
-  /**
-   * Clear the cache of compiled templates.
-   */
-  function clearCache() {
-    _cache = {};
-  }
-
-  /**
-   * Compiles the given `template` into a reusable function using the given
-   * `options`. In addition to the options accepted by Mustache.parse,
-   * recognized options include the following:
-   *
-   *   - cache    Set `false` to bypass any pre-compiled version of the given
-   *              template. Otherwise, a given `template` string will be cached
-   *              the first time it is parsed
-   */
-  function compile(template, options) {
-    options = options || {};
-
-    // Use a pre-compiled version from the cache if we have one.
-    if (options.cache !== false) {
-      if (!_cache[template]) {
-        _cache[template] = _compile(template, options);
-      }
-
-      return _cache[template];
-    }
-
-    return _compile(template, options);
-  }
-
-  /**
-   * High-level function that renders the given `template` using the given
-   * `view` and `partials`. If you need to use any of the template options (see
-   * `compile` above), you must compile in a separate step, and then call that
-   * compiled function.
-   */
-  function render(template, view, partials) {
-    return compile(template)(view, partials);
-  }
-
-})(Mustache);
-/*!
   * Reqwest! A general purpose XHR connection manager
   * (c) Dustin Diaz 2012
   * https://github.com/ded/reqwest
@@ -14081,7 +14130,11 @@ wax.interaction = function() {
         detach,
         parent,
         map,
-        tileGrid;
+        tileGrid,
+        // google maps sends touchmove and click at the same time 
+        // most of the time when an user taps the screen, see onUp 
+        // for more information
+        _discardTouchMove = false;
 
     var defaultEvents = {
         mousemove: onMove,
@@ -14095,10 +14148,16 @@ wax.interaction = function() {
         touchcancel: touchCancel
     };
 
-    var pointerEnds = {
+    var mspointerEnds = {
         MSPointerUp: onUp,
         MSPointerMove: onUp,
         MSPointerCancel: touchCancel
+    };
+
+    var pointerEnds = {
+        pointerup: onUp,
+        pointermove: onUp,
+        pointercancel: touchCancel
     };
 
     // Abstract getTile method. Depends on a tilegrid with
@@ -14137,7 +14196,7 @@ wax.interaction = function() {
         // to avoid performance hits.
         if (_downLock) return;
 
-        var _e = (e.type != "MSPointerMove" ? e : e.originalEvent);
+        var _e = (e.type !== "MSPointerMove" && e.type !== "pointermove" ? e : e.originalEvent);
         var pos = wax.u.eventoffset(_e);
 
         interaction.screen_feature(pos, function(feature) {
@@ -14163,7 +14222,7 @@ wax.interaction = function() {
         // Store this event so that we can compare it to the
         // up event
         _downLock = true;
-        var _e = (e.type != "MSPointerDown" ? e : e.originalEvent); 
+        var _e = (e.type !== "MSPointerDown" && e.type !== "pointerdown" ? e : e.originalEvent); 
         _d = wax.u.eventoffset(_e);
         if (e.type === 'mousedown') {
             bean.add(document.body, 'click', onUp);
@@ -14173,15 +14232,27 @@ wax.interaction = function() {
         // Only track single-touches. Double-touches will not affect this
         // control
         } else if (e.type === 'touchstart' && e.touches.length === 1) {
-            // Don't make the user click close if they hit another tooltip
-            bean.fire(interaction, 'off');
-            // Touch moves invalidate touches
-            bean.add(parent(), touchEnds);
+            //GMaps fix: Because it's triggering always mousedown and click, we've to remove it
+            bean.remove(document.body, 'click', onUp); //GMaps fix
+
+            //When we finish dragging, then the click will be 
+            bean.add(document.body, 'click', onUp);
+            bean.add(document.body, 'touchEnd', dragEnd);
         } else if (e.originalEvent.type === "MSPointerDown" && e.originalEvent.touches && e.originalEvent.touches.length === 1) {
           // Don't make the user click close if they hit another tooltip
             bean.fire(interaction, 'off');
             // Touch moves invalidate touches
+            bean.add(parent(), mspointerEnds);
+        } else if (e.type === "pointerdown" && e.originalEvent.touches && e.originalEvent.touches.length === 1) {
+            // Don't make the user click close if they hit another tooltip
+            bean.fire(interaction, 'off');
+            // Touch moves invalidate touches
             bean.add(parent(), pointerEnds);
+        } else {
+            // Fix layer interaction in IE10/11 (CDBjs #139)
+            // Reason: Internet Explorer is triggering pointerdown when you click on the marker, and other browsers don't.
+            // Because of that, _downLock was active and it believed that you're dragging the map, instead of dragging the marker
+            _downLock = false;
         }
 
     }
@@ -14192,14 +14263,15 @@ wax.interaction = function() {
 
     function touchCancel() {
         bean.remove(parent(), touchEnds);
+        bean.remove(parent(), mspointerEnds);
         bean.remove(parent(), pointerEnds);
         _downLock = false;
     }
 
     function onUp(e) {
-        var evt = {},
-            _e = (e.type != "MSPointerMove" && e.type != "MSPointerUp" ? e : e.originalEvent),
-            pos = wax.u.eventoffset(_e);
+        var evt = {};
+        var _e = (e.type !== "MSPointerMove" && e.type !== "MSPointerUp" && e.type !== "pointerup" && e.type !== "pointermove" ? e : e.originalEvent);
+        var pos = wax.u.eventoffset(_e);
         _downLock = false;
 
         for (var key in _e) {
@@ -14210,11 +14282,9 @@ wax.interaction = function() {
         //   evt[key] = e[key];
         // }
 
-
-        evt.changedTouches = [];
-
         bean.remove(document.body, 'mouseup', onUp);
         bean.remove(parent(), touchEnds);
+        bean.remove(parent(), mspointerEnds);
         bean.remove(parent(), pointerEnds);
 
         if (e.type === 'touchend') {
@@ -14222,10 +14292,22 @@ wax.interaction = function() {
             // but also wax.u.eventoffset will have failed, since this touch
             // event doesn't have coordinates
             interaction.click(e, _d);
-        } else if (evt.type === "MSPointerMove" || evt.type === "MSPointerUp") {
+        } else if (pos && _d) {
+          // If pos is not defined means wax can't calculate event position,
+          // So next cases aren't possible.
+
+          if (evt.type === "MSPointerMove" || evt.type === "MSPointerUp") {
+            evt.changedTouches = [];
             interaction.click(evt, pos);
-        } else if (Math.round(pos.y / tol) === Math.round(_d.y / tol) &&
+          } else if (evt.type === "pointermove" || evt.type === "pointerup") {
+            interaction.click(evt, pos);
+          } else if (Math.round(pos.y / tol) === Math.round(_d.y / tol) &&
             Math.round(pos.x / tol) === Math.round(_d.x / tol)) {
+            // if mousemove and click are sent at the same time this code
+            // will not trigger click event because less than 150ms pass between
+            // those events.
+            // Because of that this flag discards touchMove
+            if (_discardTouchMove && evt.type === 'touchmove') return onUp;
             // Contain the event data in a closure.
             // Ignore double-clicks by ignoring clicks within 300ms of
             // each other.
@@ -14237,8 +14319,17 @@ wax.interaction = function() {
             } else {
               killTimeout();
             }
+          }
+
         }
+
         return onUp;
+    }
+
+    interaction.discardTouchMove = function(_) {
+      if (!arguments.length) return _discardTouchMove;
+      _discardTouchMove = _;
+      return interaction;
     }
 
     // Handle a click event. Takes a second
@@ -14285,6 +14376,7 @@ wax.interaction = function() {
         bean.add(parent(), defaultEvents);
         bean.add(parent(), 'touchstart', onDown);
         bean.add(parent(), 'MSPointerDown', onDown);
+        bean.add(parent(), 'pointerdown', onDown);
         return interaction;
     };
 
@@ -14426,14 +14518,18 @@ wax.template = function(x) {
     // Clone the data object such that the '__[format]__' key is only
     // set for this instance of templating.
     template.format = function(options, data) {
-        var clone = {};
-        for (var key in data) {
-            clone[key] = data[key];
-        }
-        if (options.format) {
-            clone['__' + options.format + '__'] = true;
-        }
-        return wax.u.sanitize(Mustache.to_html(x, clone));
+
+        // mustache.js has been removed as a dependency
+        throw new Error('mustache.js templates are no longer supported');
+
+        // var clone = {};
+        // for (var key in data) {
+        //     clone[key] = data[key];
+        // }
+        // if (options.format) {
+        //     clone['__' + options.format + '__'] = true;
+        // }
+        // return wax.u.sanitize(Mustache.to_html(x, clone));
     };
 
     return template;
@@ -14497,6 +14593,16 @@ wax.u = {
             }
         };
 
+        //Function that protects 'Unspected error' with Internet Explorer 11
+        function calculateOffsetIE(){
+          calculateOffset(el);
+          try {
+              while (el = el.offsetParent) { calculateOffset(el); }
+          } catch(e) {
+              // Hello, internet explorer.
+          }
+        }
+
         // from jquery, offset.js
         if ( typeof el.getBoundingClientRect !== "undefined" ) {
           var body = document.body;
@@ -14506,17 +14612,17 @@ wax.u = {
           var scrollTop  = window.pageYOffset || doc.scrollTop;
           var scrollLeft = window.pageXOffset || doc.scrollLeft;
 
-          var box = el.getBoundingClientRect();
-          top = box.top + scrollTop  - clientTop;
-          left = box.left + scrollLeft - clientLeft;
-
-        } else {
-          calculateOffset(el);
+          //With Internet Explorer 11, the function getBoundingClientRect() sometimes
+          //triggers the error: 'Unspected error.' Protecting it with try/catch
           try {
-              while (el = el.offsetParent) { calculateOffset(el); }
+              var box = el.getBoundingClientRect();
+              top = box.top + scrollTop  - clientTop;
+              left = box.left + scrollLeft - clientLeft;
           } catch(e) {
-              // Hello, internet explorer.
+              calculateOffsetIE();
           }
+        } else {
+          calculateOffsetIE();
         }
 
         // Offsets from the body
@@ -14880,6 +14986,7 @@ wax.g.interaction = function() {
     return wax.interaction()
         .attach(attach)
         .detach(detach)
+        .discardTouchMove(true)
         .parent(function() {
           return map.getDiv();
         })
@@ -20674,6 +20781,4853 @@ var LZMA = (function () {
 
 /// Allow node.js to be able to access this directly if it is included directly.
 this.LZMA = LZMA;
+// -------------------------------------------------------------------------------------------------------------------
+// This file is was created from the google-caja project, and the standalone sanitizer // cd ~/src/cartodb
+// https://code.google.com/p/google-caja/wiki/JsHtmlSanitizer
+//
+// Steps to rebuild this file:
+// $ svn checkout http://google-caja.googlecode.com/svn/trunk/ google-caja
+// $ cd google-caja
+// $ ant
+// $ cp ant-lib/com/google/caja/plugin/html-css-sanitizer-bundle.js /path/to/cartodb.js/vendor/
+//
+// Additional changes after the built file above:
+// - Added: This header
+// - Modified: `sanitizeAttribs` at end, to allow "data-*"" attributes (lines ~4750-4760)
+// - changed policy for a::target attribute to be allowed (html4.ATTRIBS: { 'a::target': ... changed value from 10 to 0)
+// -------------------------------------------------------------------------------------------------------------------
+
+/* Copyright Google Inc.
+ * Licensed under the Apache Licence Version 2.0
+ * Autogenerated at Mon Mar 23 15:26:16 CET 2015
+ * \@overrides window
+ * \@provides cssSchema, CSS_PROP_BIT_QUANTITY, CSS_PROP_BIT_HASH_VALUE, CSS_PROP_BIT_NEGATIVE_QUANTITY, CSS_PROP_BIT_QSTRING, CSS_PROP_BIT_URL, CSS_PROP_BIT_UNRESERVED_WORD, CSS_PROP_BIT_UNICODE_RANGE, CSS_PROP_BIT_GLOBAL_NAME, CSS_PROP_BIT_PROPERTY_NAME */
+/**
+ * @const
+ * @type {number}
+ */
+var CSS_PROP_BIT_QUANTITY = 1;
+/**
+ * @const
+ * @type {number}
+ */
+var CSS_PROP_BIT_HASH_VALUE = 2;
+/**
+ * @const
+ * @type {number}
+ */
+var CSS_PROP_BIT_NEGATIVE_QUANTITY = 4;
+/**
+ * @const
+ * @type {number}
+ */
+var CSS_PROP_BIT_QSTRING = 8;
+/**
+ * @const
+ * @type {number}
+ */
+var CSS_PROP_BIT_URL = 16;
+/**
+ * @const
+ * @type {number}
+ */
+var CSS_PROP_BIT_UNRESERVED_WORD = 64;
+/**
+ * @const
+ * @type {number}
+ */
+var CSS_PROP_BIT_UNICODE_RANGE = 128;
+/**
+ * @const
+ * @type {number}
+ */
+var CSS_PROP_BIT_GLOBAL_NAME = 512;
+/**
+ * @const
+ * @type {number}
+ */
+var CSS_PROP_BIT_PROPERTY_NAME = 1024;
+var cssSchema = (function () {
+    var L = [ [ 'aliceblue', 'antiquewhite', 'aqua', 'aquamarine', 'azure',
+        'beige', 'bisque', 'black', 'blanchedalmond', 'blue', 'blueviolet',
+        'brown', 'burlywood', 'cadetblue', 'chartreuse', 'chocolate', 'coral',
+        'cornflowerblue', 'cornsilk', 'crimson', 'cyan', 'darkblue',
+        'darkcyan', 'darkgoldenrod', 'darkgray', 'darkgreen', 'darkkhaki',
+        'darkmagenta', 'darkolivegreen', 'darkorange', 'darkorchid', 'darkred',
+        'darksalmon', 'darkseagreen', 'darkslateblue', 'darkslategray',
+        'darkturquoise', 'darkviolet', 'deeppink', 'deepskyblue', 'dimgray',
+        'dodgerblue', 'firebrick', 'floralwhite', 'forestgreen', 'fuchsia',
+        'gainsboro', 'ghostwhite', 'gold', 'goldenrod', 'gray', 'green',
+        'greenyellow', 'honeydew', 'hotpink', 'indianred', 'indigo', 'ivory',
+        'khaki', 'lavender', 'lavenderblush', 'lawngreen', 'lemonchiffon',
+        'lightblue', 'lightcoral', 'lightcyan', 'lightgoldenrodyellow',
+        'lightgreen', 'lightgrey', 'lightpink', 'lightsalmon', 'lightseagreen',
+        'lightskyblue', 'lightslategray', 'lightsteelblue', 'lightyellow',
+        'lime', 'limegreen', 'linen', 'magenta', 'maroon', 'mediumaquamarine',
+        'mediumblue', 'mediumorchid', 'mediumpurple', 'mediumseagreen',
+        'mediumslateblue', 'mediumspringgreen', 'mediumturquoise',
+        'mediumvioletred', 'midnightblue', 'mintcream', 'mistyrose',
+        'moccasin', 'navajowhite', 'navy', 'oldlace', 'olive', 'olivedrab',
+        'orange', 'orangered', 'orchid', 'palegoldenrod', 'palegreen',
+        'paleturquoise', 'palevioletred', 'papayawhip', 'peachpuff', 'peru',
+        'pink', 'plum', 'powderblue', 'purple', 'red', 'rosybrown',
+        'royalblue', 'saddlebrown', 'salmon', 'sandybrown', 'seagreen',
+        'seashell', 'sienna', 'silver', 'skyblue', 'slateblue', 'slategray',
+        'snow', 'springgreen', 'steelblue', 'tan', 'teal', 'thistle', 'tomato',
+        'transparent', 'turquoise', 'violet', 'wheat', 'white', 'whitesmoke',
+        'yellow', 'yellowgreen' ], [ 'all-scroll', 'col-resize', 'crosshair',
+        'default', 'e-resize', 'hand', 'help', 'move', 'n-resize', 'ne-resize',
+        'no-drop', 'not-allowed', 'nw-resize', 'pointer', 'progress',
+        'row-resize', 's-resize', 'se-resize', 'sw-resize', 'text',
+        'vertical-text', 'w-resize', 'wait' ], [ 'armenian', 'decimal',
+        'decimal-leading-zero', 'disc', 'georgian', 'lower-alpha',
+        'lower-greek', 'lower-latin', 'lower-roman', 'square', 'upper-alpha',
+        'upper-latin', 'upper-roman' ], [ '100', '200', '300', '400', '500',
+        '600', '700', '800', '900', 'bold', 'bolder', 'lighter' ], [
+        'block-level', 'inline-level', 'table-caption', 'table-cell',
+        'table-column', 'table-column-group', 'table-footer-group',
+        'table-header-group', 'table-row', 'table-row-group' ], [ 'condensed',
+        'expanded', 'extra-condensed', 'extra-expanded', 'narrower',
+        'semi-condensed', 'semi-expanded', 'ultra-condensed', 'ultra-expanded',
+        'wider' ], [ 'inherit', 'inline', 'inline-block', 'inline-box',
+        'inline-flex', 'inline-grid', 'inline-list-item', 'inline-stack',
+        'inline-table', 'run-in' ], [ 'behind', 'center-left', 'center-right',
+        'far-left', 'far-right', 'left-side', 'leftwards', 'right-side',
+        'rightwards' ], [ 'large', 'larger', 'small', 'smaller', 'x-large',
+        'x-small', 'xx-large', 'xx-small' ], [ 'dashed', 'dotted', 'double',
+        'groove', 'outset', 'ridge', 'solid' ], [ 'ease', 'ease-in',
+        'ease-in-out', 'ease-out', 'linear', 'step-end', 'step-start' ], [
+        'at', 'closest-corner', 'closest-side', 'ellipse', 'farthest-corner',
+        'farthest-side' ], [ 'baseline', 'middle', 'sub', 'super',
+        'text-bottom', 'text-top' ], [ 'caption', 'icon', 'menu',
+        'message-box', 'small-caption', 'status-bar' ], [ 'fast', 'faster',
+        'slow', 'slower', 'x-fast', 'x-slow' ], [ 'above', 'below', 'higher',
+        'level', 'lower' ], [ 'cursive', 'fantasy', 'monospace', 'sans-serif',
+        'serif' ], [ 'loud', 'silent', 'soft', 'x-loud', 'x-soft' ], [
+        'no-repeat', 'repeat-x', 'repeat-y', 'round', 'space' ], [ 'blink',
+        'line-through', 'overline', 'underline' ], [ 'block', 'flex', 'grid',
+        'table' ], [ 'high', 'low', 'x-high', 'x-low' ], [ 'nowrap', 'pre',
+        'pre-line', 'pre-wrap' ], [ 'absolute', 'relative', 'static' ], [
+        'alternate', 'alternate-reverse', 'reverse' ], [ 'border-box',
+        'content-box', 'padding-box' ], [ 'capitalize', 'lowercase',
+        'uppercase' ], [ 'child', 'female', 'male' ], [ '=', 'opacity' ], [
+        'backwards', 'forwards' ], [ 'bidi-override', 'embed' ], [ 'bottom',
+        'top' ], [ 'break-all', 'keep-all' ], [ 'clip', 'ellipsis' ], [
+        'contain', 'cover' ], [ 'continuous', 'digits' ], [ 'end', 'start' ], [
+        'flat', 'preserve-3d' ], [ 'hide', 'show' ], [ 'horizontal', 'vertical'
+      ], [ 'inside', 'outside' ], [ 'italic', 'oblique' ], [ 'left', 'right' ],
+      [ 'ltr', 'rtl' ], [ 'no-content', 'no-display' ], [ 'paused', 'running' ]
+      , [ 'suppress', 'unrestricted' ], [ 'thick', 'thin' ], [ ',' ], [ '/' ],
+      [ 'all' ], [ 'always' ], [ 'auto' ], [ 'avoid' ], [ 'both' ], [
+        'break-word' ], [ 'center' ], [ 'circle' ], [ 'code' ], [ 'collapse' ],
+      [ 'contents' ], [ 'fixed' ], [ 'hidden' ], [ 'infinite' ], [ 'inset' ], [
+        'invert' ], [ 'justify' ], [ 'list-item' ], [ 'local' ], [ 'medium' ],
+      [ 'mix' ], [ 'none' ], [ 'normal' ], [ 'once' ], [ 'repeat' ], [ 'scroll'
+      ], [ 'separate' ], [ 'small-caps' ], [ 'spell-out' ], [ 'to' ], [
+        'visible' ] ];
+    var schema = {
+      'animation': {
+        'cssPropBits': 517,
+        'cssLitGroup': [ L[ 10 ], L[ 24 ], L[ 29 ], L[ 45 ], L[ 48 ], L[ 54 ],
+          L[ 63 ], L[ 71 ], L[ 72 ] ],
+        'cssFns': [ 'cubic-bezier()', 'steps()' ]
+      },
+      'animation-delay': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 48 ] ],
+        'cssFns': [ ]
+      },
+      'animation-direction': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 24 ], L[ 48 ], L[ 72 ] ],
+        'cssFns': [ ]
+      },
+      'animation-duration': 'animation-delay',
+      'animation-fill-mode': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 29 ], L[ 48 ], L[ 54 ], L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'animation-iteration-count': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 48 ], L[ 63 ] ],
+        'cssFns': [ ]
+      },
+      'animation-name': {
+        'cssPropBits': 512,
+        'cssLitGroup': [ L[ 48 ], L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'animation-play-state': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 45 ], L[ 48 ] ],
+        'cssFns': [ ]
+      },
+      'animation-timing-function': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 10 ], L[ 48 ] ],
+        'cssFns': [ 'cubic-bezier()', 'steps()' ]
+      },
+      'appearance': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'azimuth': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 7 ], L[ 42 ], L[ 56 ] ],
+        'cssFns': [ ]
+      },
+      'backface-visibility': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 59 ], L[ 62 ], L[ 80 ] ],
+        'cssFns': [ ]
+      },
+      'background': {
+        'cssPropBits': 23,
+        'cssLitGroup': [ L[ 0 ], L[ 18 ], L[ 25 ], L[ 31 ], L[ 34 ], L[ 42 ],
+          L[ 48 ], L[ 49 ], L[ 52 ], L[ 56 ], L[ 61 ], L[ 68 ], L[ 71 ], L[ 74
+          ], L[ 75 ] ],
+        'cssFns': [ 'image()', 'linear-gradient()', 'radial-gradient()',
+          'repeating-linear-gradient()', 'repeating-radial-gradient()',
+          'rgb()', 'rgba()' ]
+      },
+      'background-attachment': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 48 ], L[ 61 ], L[ 68 ], L[ 75 ] ],
+        'cssFns': [ ]
+      },
+      'background-color': {
+        'cssPropBits': 2,
+        'cssLitGroup': [ L[ 0 ] ],
+        'cssFns': [ 'rgb()', 'rgba()' ]
+      },
+      'background-image': {
+        'cssPropBits': 16,
+        'cssLitGroup': [ L[ 48 ], L[ 71 ] ],
+        'cssFns': [ 'image()', 'linear-gradient()', 'radial-gradient()',
+          'repeating-linear-gradient()', 'repeating-radial-gradient()' ]
+      },
+      'background-position': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 31 ], L[ 42 ], L[ 48 ], L[ 56 ] ],
+        'cssFns': [ ]
+      },
+      'background-repeat': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 18 ], L[ 48 ], L[ 74 ] ],
+        'cssFns': [ ]
+      },
+      'background-size': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 34 ], L[ 48 ], L[ 52 ] ],
+        'cssFns': [ ]
+      },
+      'border': {
+        'cssPropBits': 7,
+        'cssLitGroup': [ L[ 0 ], L[ 9 ], L[ 47 ], L[ 62 ], L[ 64 ], L[ 69 ], L[
+            71 ] ],
+        'cssFns': [ 'rgb()', 'rgba()' ]
+      },
+      'border-bottom': 'border',
+      'border-bottom-color': 'background-color',
+      'border-bottom-left-radius': {
+        'cssPropBits': 5,
+        'cssFns': [ ]
+      },
+      'border-bottom-right-radius': 'border-bottom-left-radius',
+      'border-bottom-style': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 9 ], L[ 62 ], L[ 64 ], L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'border-bottom-width': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 47 ], L[ 69 ] ],
+        'cssFns': [ ]
+      },
+      'border-collapse': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 59 ], L[ 76 ] ],
+        'cssFns': [ ]
+      },
+      'border-color': 'background-color',
+      'border-left': 'border',
+      'border-left-color': 'background-color',
+      'border-left-style': 'border-bottom-style',
+      'border-left-width': 'border-bottom-width',
+      'border-radius': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 49 ] ],
+        'cssFns': [ ]
+      },
+      'border-right': 'border',
+      'border-right-color': 'background-color',
+      'border-right-style': 'border-bottom-style',
+      'border-right-width': 'border-bottom-width',
+      'border-spacing': 'border-bottom-left-radius',
+      'border-style': 'border-bottom-style',
+      'border-top': 'border',
+      'border-top-color': 'background-color',
+      'border-top-left-radius': 'border-bottom-left-radius',
+      'border-top-right-radius': 'border-bottom-left-radius',
+      'border-top-style': 'border-bottom-style',
+      'border-top-width': 'border-bottom-width',
+      'border-width': 'border-bottom-width',
+      'bottom': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 52 ] ],
+        'cssFns': [ ]
+      },
+      'box': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 60 ], L[ 71 ], L[ 72 ] ],
+        'cssFns': [ ]
+      },
+      'box-shadow': {
+        'cssPropBits': 7,
+        'cssLitGroup': [ L[ 0 ], L[ 48 ], L[ 64 ], L[ 71 ] ],
+        'cssFns': [ 'rgb()', 'rgba()' ]
+      },
+      'box-sizing': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 25 ] ],
+        'cssFns': [ ]
+      },
+      'caption-side': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 31 ] ],
+        'cssFns': [ ]
+      },
+      'clear': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 42 ], L[ 54 ], L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'clip': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 52 ] ],
+        'cssFns': [ 'rect()' ]
+      },
+      'color': 'background-color',
+      'content': {
+        'cssPropBits': 8,
+        'cssLitGroup': [ L[ 71 ], L[ 72 ] ],
+        'cssFns': [ ]
+      },
+      'cue': {
+        'cssPropBits': 16,
+        'cssLitGroup': [ L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'cue-after': 'cue',
+      'cue-before': 'cue',
+      'cursor': {
+        'cssPropBits': 16,
+        'cssLitGroup': [ L[ 1 ], L[ 48 ], L[ 52 ] ],
+        'cssFns': [ ]
+      },
+      'direction': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 43 ] ],
+        'cssFns': [ ]
+      },
+      'display': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 4 ], L[ 6 ], L[ 20 ], L[ 52 ], L[ 67 ], L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'display-extras': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 67 ], L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'display-inside': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 20 ], L[ 52 ] ],
+        'cssFns': [ ]
+      },
+      'display-outside': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 4 ], L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'elevation': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 15 ] ],
+        'cssFns': [ ]
+      },
+      'empty-cells': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 38 ] ],
+        'cssFns': [ ]
+      },
+      'filter': {
+        'cssPropBits': 0,
+        'cssFns': [ 'alpha()' ]
+      },
+      'float': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 42 ], L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'font': {
+        'cssPropBits': 73,
+        'cssLitGroup': [ L[ 3 ], L[ 8 ], L[ 13 ], L[ 16 ], L[ 41 ], L[ 48 ], L[
+            49 ], L[ 69 ], L[ 72 ], L[ 77 ] ],
+        'cssFns': [ ]
+      },
+      'font-family': {
+        'cssPropBits': 72,
+        'cssLitGroup': [ L[ 16 ], L[ 48 ] ],
+        'cssFns': [ ]
+      },
+      'font-size': {
+        'cssPropBits': 1,
+        'cssLitGroup': [ L[ 8 ], L[ 69 ] ],
+        'cssFns': [ ]
+      },
+      'font-stretch': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 5 ], L[ 72 ] ],
+        'cssFns': [ ]
+      },
+      'font-style': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 41 ], L[ 72 ] ],
+        'cssFns': [ ]
+      },
+      'font-variant': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 72 ], L[ 77 ] ],
+        'cssFns': [ ]
+      },
+      'font-weight': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 3 ], L[ 72 ] ],
+        'cssFns': [ ]
+      },
+      'height': 'bottom',
+      'left': 'bottom',
+      'letter-spacing': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 72 ] ],
+        'cssFns': [ ]
+      },
+      'line-height': {
+        'cssPropBits': 1,
+        'cssLitGroup': [ L[ 72 ] ],
+        'cssFns': [ ]
+      },
+      'list-style': {
+        'cssPropBits': 16,
+        'cssLitGroup': [ L[ 2 ], L[ 40 ], L[ 57 ], L[ 71 ] ],
+        'cssFns': [ 'image()', 'linear-gradient()', 'radial-gradient()',
+          'repeating-linear-gradient()', 'repeating-radial-gradient()' ]
+      },
+      'list-style-image': {
+        'cssPropBits': 16,
+        'cssLitGroup': [ L[ 71 ] ],
+        'cssFns': [ 'image()', 'linear-gradient()', 'radial-gradient()',
+          'repeating-linear-gradient()', 'repeating-radial-gradient()' ]
+      },
+      'list-style-position': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 40 ] ],
+        'cssFns': [ ]
+      },
+      'list-style-type': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 2 ], L[ 57 ], L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'margin': 'bottom',
+      'margin-bottom': 'bottom',
+      'margin-left': 'bottom',
+      'margin-right': 'bottom',
+      'margin-top': 'bottom',
+      'max-height': {
+        'cssPropBits': 1,
+        'cssLitGroup': [ L[ 52 ], L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'max-width': 'max-height',
+      'min-height': {
+        'cssPropBits': 1,
+        'cssLitGroup': [ L[ 52 ] ],
+        'cssFns': [ ]
+      },
+      'min-width': 'min-height',
+      'opacity': {
+        'cssPropBits': 1,
+        'cssFns': [ ]
+      },
+      'outline': {
+        'cssPropBits': 7,
+        'cssLitGroup': [ L[ 0 ], L[ 9 ], L[ 47 ], L[ 62 ], L[ 64 ], L[ 65 ], L[
+            69 ], L[ 71 ] ],
+        'cssFns': [ 'rgb()', 'rgba()' ]
+      },
+      'outline-color': {
+        'cssPropBits': 2,
+        'cssLitGroup': [ L[ 0 ], L[ 65 ] ],
+        'cssFns': [ 'rgb()', 'rgba()' ]
+      },
+      'outline-style': 'border-bottom-style',
+      'outline-width': 'border-bottom-width',
+      'overflow': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 52 ], L[ 62 ], L[ 75 ], L[ 80 ] ],
+        'cssFns': [ ]
+      },
+      'overflow-wrap': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 55 ], L[ 72 ] ],
+        'cssFns': [ ]
+      },
+      'overflow-x': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 44 ], L[ 52 ], L[ 62 ], L[ 75 ], L[ 80 ] ],
+        'cssFns': [ ]
+      },
+      'overflow-y': 'overflow-x',
+      'padding': 'opacity',
+      'padding-bottom': 'opacity',
+      'padding-left': 'opacity',
+      'padding-right': 'opacity',
+      'padding-top': 'opacity',
+      'page-break-after': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 42 ], L[ 51 ], L[ 52 ], L[ 53 ] ],
+        'cssFns': [ ]
+      },
+      'page-break-before': 'page-break-after',
+      'page-break-inside': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 52 ], L[ 53 ] ],
+        'cssFns': [ ]
+      },
+      'pause': 'border-bottom-left-radius',
+      'pause-after': 'border-bottom-left-radius',
+      'pause-before': 'border-bottom-left-radius',
+      'perspective': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'perspective-origin': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 31 ], L[ 42 ], L[ 56 ] ],
+        'cssFns': [ ]
+      },
+      'pitch': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 21 ], L[ 69 ] ],
+        'cssFns': [ ]
+      },
+      'pitch-range': 'border-bottom-left-radius',
+      'play-during': {
+        'cssPropBits': 16,
+        'cssLitGroup': [ L[ 52 ], L[ 70 ], L[ 71 ], L[ 74 ] ],
+        'cssFns': [ ]
+      },
+      'position': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 23 ] ],
+        'cssFns': [ ]
+      },
+      'quotes': {
+        'cssPropBits': 8,
+        'cssLitGroup': [ L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'resize': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 39 ], L[ 54 ], L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'richness': 'border-bottom-left-radius',
+      'right': 'bottom',
+      'speak': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 71 ], L[ 72 ], L[ 78 ] ],
+        'cssFns': [ ]
+      },
+      'speak-header': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 51 ], L[ 73 ] ],
+        'cssFns': [ ]
+      },
+      'speak-numeral': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 35 ] ],
+        'cssFns': [ ]
+      },
+      'speak-punctuation': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 58 ], L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'speech-rate': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 14 ], L[ 69 ] ],
+        'cssFns': [ ]
+      },
+      'stress': 'border-bottom-left-radius',
+      'table-layout': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 52 ], L[ 61 ] ],
+        'cssFns': [ ]
+      },
+      'text-align': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 42 ], L[ 56 ], L[ 66 ] ],
+        'cssFns': [ ]
+      },
+      'text-decoration': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 19 ], L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'text-indent': 'border-bottom-left-radius',
+      'text-overflow': {
+        'cssPropBits': 8,
+        'cssLitGroup': [ L[ 33 ] ],
+        'cssFns': [ ]
+      },
+      'text-shadow': 'box-shadow',
+      'text-transform': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 26 ], L[ 71 ] ],
+        'cssFns': [ ]
+      },
+      'text-wrap': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 46 ], L[ 71 ], L[ 72 ] ],
+        'cssFns': [ ]
+      },
+      'top': 'bottom',
+      'transform': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 71 ] ],
+        'cssFns': [ 'matrix()', 'perspective()', 'rotate()', 'rotate3d()',
+          'rotatex()', 'rotatey()', 'rotatez()', 'scale()', 'scale3d()',
+          'scalex()', 'scaley()', 'scalez()', 'skew()', 'skewx()', 'skewy()',
+          'translate()', 'translate3d()', 'translatex()', 'translatey()',
+          'translatez()' ]
+      },
+      'transform-origin': 'perspective-origin',
+      'transform-style': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 37 ] ],
+        'cssFns': [ ]
+      },
+      'transition': {
+        'cssPropBits': 1029,
+        'cssLitGroup': [ L[ 10 ], L[ 48 ], L[ 50 ], L[ 71 ] ],
+        'cssFns': [ 'cubic-bezier()', 'steps()' ]
+      },
+      'transition-delay': 'animation-delay',
+      'transition-duration': 'animation-delay',
+      'transition-property': {
+        'cssPropBits': 1024,
+        'cssLitGroup': [ L[ 48 ], L[ 50 ] ],
+        'cssFns': [ ]
+      },
+      'transition-timing-function': 'animation-timing-function',
+      'unicode-bidi': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 30 ], L[ 72 ] ],
+        'cssFns': [ ]
+      },
+      'vertical-align': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 12 ], L[ 31 ] ],
+        'cssFns': [ ]
+      },
+      'visibility': 'backface-visibility',
+      'voice-family': {
+        'cssPropBits': 8,
+        'cssLitGroup': [ L[ 27 ], L[ 48 ] ],
+        'cssFns': [ ]
+      },
+      'volume': {
+        'cssPropBits': 1,
+        'cssLitGroup': [ L[ 17 ], L[ 69 ] ],
+        'cssFns': [ ]
+      },
+      'white-space': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 22 ], L[ 72 ] ],
+        'cssFns': [ ]
+      },
+      'width': 'min-height',
+      'word-break': {
+        'cssPropBits': 0,
+        'cssLitGroup': [ L[ 32 ], L[ 72 ] ],
+        'cssFns': [ ]
+      },
+      'word-spacing': 'letter-spacing',
+      'word-wrap': 'overflow-wrap',
+      'z-index': 'bottom',
+      'zoom': 'line-height',
+      'cubic-bezier()': 'animation-delay',
+      'steps()': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 36 ], L[ 48 ] ],
+        'cssFns': [ ]
+      },
+      'image()': {
+        'cssPropBits': 18,
+        'cssLitGroup': [ L[ 0 ], L[ 48 ] ],
+        'cssFns': [ 'rgb()', 'rgba()' ]
+      },
+      'linear-gradient()': {
+        'cssPropBits': 7,
+        'cssLitGroup': [ L[ 0 ], L[ 31 ], L[ 42 ], L[ 48 ], L[ 79 ] ],
+        'cssFns': [ 'rgb()', 'rgba()' ]
+      },
+      'radial-gradient()': {
+        'cssPropBits': 7,
+        'cssLitGroup': [ L[ 0 ], L[ 11 ], L[ 31 ], L[ 42 ], L[ 48 ], L[ 56 ],
+          L[ 57 ] ],
+        'cssFns': [ 'rgb()', 'rgba()' ]
+      },
+      'repeating-linear-gradient()': 'linear-gradient()',
+      'repeating-radial-gradient()': 'radial-gradient()',
+      'rgb()': {
+        'cssPropBits': 1,
+        'cssLitGroup': [ L[ 48 ] ],
+        'cssFns': [ ]
+      },
+      'rgba()': 'rgb()',
+      'rect()': {
+        'cssPropBits': 5,
+        'cssLitGroup': [ L[ 48 ], L[ 52 ] ],
+        'cssFns': [ ]
+      },
+      'alpha()': {
+        'cssPropBits': 1,
+        'cssLitGroup': [ L[ 28 ] ],
+        'cssFns': [ ]
+      },
+      'matrix()': 'animation-delay',
+      'perspective()': 'border-bottom-left-radius',
+      'rotate()': 'border-bottom-left-radius',
+      'rotate3d()': 'animation-delay',
+      'rotatex()': 'border-bottom-left-radius',
+      'rotatey()': 'border-bottom-left-radius',
+      'rotatez()': 'border-bottom-left-radius',
+      'scale()': 'animation-delay',
+      'scale3d()': 'animation-delay',
+      'scalex()': 'border-bottom-left-radius',
+      'scaley()': 'border-bottom-left-radius',
+      'scalez()': 'border-bottom-left-radius',
+      'skew()': 'animation-delay',
+      'skewx()': 'border-bottom-left-radius',
+      'skewy()': 'border-bottom-left-radius',
+      'translate()': 'animation-delay',
+      'translate3d()': 'animation-delay',
+      'translatex()': 'border-bottom-left-radius',
+      'translatey()': 'border-bottom-left-radius',
+      'translatez()': 'border-bottom-left-radius'
+    };
+    if (true) {
+      for (var key in schema) {
+        if ('string' === typeof schema[ key ] &&
+          Object.hasOwnProperty.call(schema, key)) {
+          schema[ key ] = schema[ schema[ key ] ];
+        }
+      }
+    }
+    return schema;
+  })();
+if (typeof window !== 'undefined') {
+  window['cssSchema'] = cssSchema;
+}
+;
+// Copyright (C) 2011 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/**
+ * A lexical scannar for CSS3 as defined at http://www.w3.org/TR/css3-syntax .
+ *
+ * @author Mike Samuel <mikesamuel@gmail.com>
+ * \@provides lexCss, decodeCss
+ * \@overrides window
+ */
+
+var lexCss;
+var decodeCss;
+
+(function () {
+
+  /**
+   * Decodes an escape sequence as specified in CSS3 section 4.1.
+   * http://www.w3.org/TR/css3-syntax/#characters
+   * @private
+   */
+  function decodeCssEscape(s) {
+    var i = parseInt(s.substring(1), 16);
+    // If parseInt didn't find a hex diigt, it returns NaN so return the
+    // escaped character.
+    // Otherwise, parseInt will stop at the first non-hex digit so there's no
+    // need to worry about trailing whitespace.
+    if (i > 0xffff) {
+      // A supplemental codepoint.
+      return i -= 0x10000,
+        String.fromCharCode(
+            0xd800 + (i >> 10),
+            0xdc00 + (i & 0x3FF));
+    } else if (i == i) {
+      return String.fromCharCode(i);
+    } else if (s[1] < ' ') {
+      // "a backslash followed by a newline is ignored".
+      return '';
+    } else {
+      return s[1];
+    }
+  }
+
+  /**
+   * Returns an equivalent CSS string literal given plain text: foo -> "foo".
+   * @private
+   */
+  function escapeCssString(s, replacer) {
+    return '"' + s.replace(/[\u0000-\u001f\\\"<>]/g, replacer) + '"';
+  }
+
+  /**
+   * Maps chars to CSS escaped equivalents: "\n" -> "\\a ".
+   * @private
+   */
+  function escapeCssStrChar(ch) {
+    return cssStrChars[ch]
+        || (cssStrChars[ch] = '\\' + ch.charCodeAt(0).toString(16) + ' ');
+  }
+
+  /**
+   * Maps chars to URI escaped equivalents: "\n" -> "%0a".
+   * @private
+   */
+  function escapeCssUrlChar(ch) {
+    return cssUrlChars[ch]
+        || (cssUrlChars[ch] = (ch < '\x10' ? '%0' : '%')
+            + ch.charCodeAt(0).toString(16));
+  }
+
+  /**
+   * Mapping of CSS special characters to escaped equivalents.
+   * @private
+   */
+  var cssStrChars = {
+    '\\': '\\\\'
+  };
+
+  /**
+   * Mapping of CSS special characters to URL-escaped equivalents.
+   * @private
+   */
+  var cssUrlChars = {
+    '\\': '%5c'
+  };
+
+  // The comments below are copied from the CSS3 module syntax at
+  // http://www.w3.org/TR/css3-syntax .
+  // These string constants minify out when this is run-through closure
+  // compiler.
+  // Rules that have been adapted have comments prefixed with "Diff:", and
+  // where rules have been combined to avoid back-tracking in the regex engine
+  // or to work around limitations, there is a comment prefixed with
+  // "NewRule:".
+
+  // In the below, we assume CRLF and CR have been normalize to CR.
+
+  // wc  ::=  #x9 | #xA | #xC | #xD | #x20
+  var WC = '[\\t\\n\\f ]';
+  // w  ::=  wc*
+  var W = WC + '*';
+  // nl  ::=  #xA | #xD #xA | #xD | #xC
+  var NL = '[\\n\\f]';
+  // nonascii  ::=  [#x80-#xD7FF#xE000-#xFFFD#x10000-#x10FFFF]
+  // NewRule: Supplemental codepoints are represented as surrogate pairs in JS.
+  var SURROGATE_PAIR = '[\\ud800-\\udbff][\\udc00-\\udfff]';
+  var NONASCII = '[\\u0080-\\ud7ff\\ue000-\\ufffd]|' + SURROGATE_PAIR;
+  // unicode  ::=  '\' [0-9a-fA-F]{1,6} wc?
+  // NewRule: No point in having ESCAPE do (\\x|\\y)
+  var UNICODE_TAIL = '[0-9a-fA-F]{1,6}' + WC + '?';
+  var UNICODE = '\\\\' + UNICODE_TAIL;
+  // escape  ::=  unicode
+  //           | '\' [#x20-#x7E#x80-#xD7FF#xE000-#xFFFD#x10000-#x10FFFF]
+  // NewRule: Below we use escape tail to efficiently match an escape or a
+  // line continuation so we can decode string content.
+  var ESCAPE_TAIL = '(?:' + UNICODE_TAIL
+      + '|[\\u0020-\\u007e\\u0080-\\ud7ff\\ue000\\ufffd]|'
+      + SURROGATE_PAIR + ')';
+  var ESCAPE = '\\\\' + ESCAPE_TAIL;
+  // urlchar  ::=  [#x9#x21#x23-#x26#x28-#x7E] | nonascii | escape
+  var URLCHAR = '(?:[\\t\\x21\\x23-\\x26\\x28-\\x5b\\x5d-\\x7e]|'
+      + NONASCII + '|' + ESCAPE + ')';
+  // stringchar  ::= urlchar | #x20 | '\' nl
+  // We ignore mismatched surrogate pairs inside strings, so stringchar
+  // simplifies to a non-(quote|newline|backslash) or backslash any.
+  // Since we normalize CRLF to a single code-unit, there is no special
+  // handling needed for '\\' + CRLF.
+  var STRINGCHAR = '[^\'"\\n\\f\\\\]|\\\\[\\s\\S]';
+  // string  ::=  '"' (stringchar | "'")* '"' | "'" (stringchar | '"')* "'"
+  var STRING = '"(?:\'|' + STRINGCHAR + ')*"'
+      + '|\'(?:\"|' + STRINGCHAR + ')*\'';
+  // num  ::=  [0-9]+ | [0-9]* '.' [0-9]+
+  // Diff: We attach signs to num tokens.
+  var NUM = '[-+]?(?:[0-9]+(?:[.][0-9]+)?|[.][0-9]+)';
+  // nmstart  ::=  [a-zA-Z] | '_' | nonascii | escape
+  var NMSTART = '(?:[a-zA-Z_]|' + NONASCII + '|' + ESCAPE + ')';
+  // nmchar  ::=  [a-zA-Z0-9] | '-' | '_' | nonascii | escape
+  var NMCHAR = '(?:[a-zA-Z0-9_-]|' + NONASCII + '|' + ESCAPE + ')';
+  // name  ::=  nmchar+
+  var NAME = NMCHAR + '+';
+  // ident  ::=  '-'? nmstart nmchar*
+  var IDENT = '-?' + NMSTART + NMCHAR + '*';
+
+  // ATKEYWORD  ::=  '@' ident
+  var ATKEYWORD = '@' + IDENT;
+  // HASH  ::=  '#' name
+  var HASH = '#' + NAME;
+  // NUMBER  ::=  num
+  var NUMBER = NUM;
+
+  // NewRule: union of IDENT, ATKEYWORD, HASH, but excluding #[0-9].
+  var WORD_TERM = '(?:@?-?' + NMSTART + '|#)' + NMCHAR + '*';
+
+  // PERCENTAGE  ::=  num '%'
+  var PERCENTAGE = NUM + '%';
+  // DIMENSION  ::=  num ident
+  var DIMENSION = NUM + IDENT;
+  var NUMERIC_VALUE = NUM + '(?:%|' + IDENT + ')?';
+  // URI  ::=  "url(" w (string | urlchar* ) w ")"
+  var URI = 'url[(]' + W + '(?:' + STRING + '|' + URLCHAR + '*)' + W + '[)]';
+  // UNICODE-RANGE  ::=  "U+" [0-9A-F?]{1,6} ('-' [0-9A-F]{1,6})?
+  var UNICODE_RANGE = 'U[+][0-9A-F?]{1,6}(?:-[0-9A-F]{1,6})?';
+  // CDO  ::=  "<\!--"
+  var CDO = '<\!--';
+  // CDC  ::=  "-->"
+  var CDC = '-->';
+  // S  ::=  wc+
+  var S = WC + '+';
+  // COMMENT  ::=  "/*" [^*]* '*'+ ([^/] [^*]* '*'+)* "/"
+  // Diff: recognizes // comments.
+  var COMMENT = '/(?:[*][^*]*[*]+(?:[^/][^*]*[*]+)*/|/[^\\n\\f]*)';
+  // FUNCTION  ::=  ident '('
+  // Diff: We exclude url explicitly.
+  // TODO: should we be tolerant of "fn ("?
+  var FUNCTION = '(?!url[(])' + IDENT + '[(]';
+  // INCLUDES  ::=  "~="
+  var INCLUDES = '~=';
+  // DASHMATCH  ::=  "|="
+  var DASHMATCH = '[|]=';
+  // PREFIXMATCH  ::=  "^="
+  var PREFIXMATCH = '[^]=';
+  // SUFFIXMATCH  ::=  "$="
+  var SUFFIXMATCH = '[$]=';
+  // SUBSTRINGMATCH  ::=  "*="
+  var SUBSTRINGMATCH = '[*]=';
+  // NewRule: one rule for all the comparison operators.
+  var CMP_OPS = '[~|^$*]=';
+  // CHAR  ::=  any character not matched by the above rules, except for " or '
+  // Diff: We exclude / and \ since they are handled above to prevent
+  // /* without a following */ from combining when comments are concatenated.
+  var CHAR = '[^"\'\\\\/]|/(?![/*])';
+  // BOM  ::=  #xFEFF
+  var BOM = '\\uFEFF';
+
+  var CSS_TOKEN = new RegExp([
+      BOM, UNICODE_RANGE, URI, FUNCTION, WORD_TERM, STRING, NUMERIC_VALUE,
+      CDO, CDC, S, COMMENT, CMP_OPS, CHAR].join("|"), 'gi');
+
+  var CSS_DECODER = new RegExp('\\\\(?:' + ESCAPE_TAIL + '|' + NL + ')', 'g');
+  var URL_RE = new RegExp('^url\\(' + W + '["\']?|["\']?' + W + '\\)$', 'gi');
+  /**
+   * Decodes CSS escape sequences in a CSS string body.
+   */
+   decodeCss = function (css) {
+     return css.replace(CSS_DECODER, decodeCssEscape);
+   };
+
+  /**
+   * Given CSS Text, returns an array of normalized tokens.
+   * @param {string} cssText
+   * @return {Array.<string>} tokens where all ignorable token sequences have
+   *    been reduced to a single {@code " "} and all strings and
+   *    {@code url(...)} tokens have been normalized to use double quotes as
+   *    delimiters and to not otherwise contain double quotes.
+   */
+  lexCss = function (cssText) {
+    // Stringify input. Additionally, insert and remove a non-latin1 character
+    // to force Firefox 33 to switch to a wide string representation, avoiding
+    // a performance bug. This workaround should become unnecessary after
+    // Firefox 34. https://bugzilla.mozilla.org/show_bug.cgi?id=1081175
+    // https://code.google.com/p/google-caja/issues/detail?id=1941
+    cssText = ('\uffff' + cssText).replace(/^\uffff/, '');
+
+    // // Normalize CRLF & CR to LF.
+    cssText = cssText.replace(/\r\n?/g, '\n');
+
+    // Tokenize.
+    var tokens = cssText.match(CSS_TOKEN) || [];
+    var j = 0;
+    var last = ' ';
+    for (var i = 0, n = tokens.length; i < n; ++i) {
+      // Normalize all escape sequences.  We will have to re-escape some
+      // codepoints in string and url(...) bodies but we already know the
+      // boundaries.
+      // We might mistakenly treat a malformed identifier like \22\20\22 as a
+      // string, but that will not break any valid stylesheets since we requote
+      // and re-escape in string below.
+      var tok = decodeCss(tokens[i]);
+      var len = tok.length;
+      var cc = tok.charCodeAt(0);
+      tok =
+          // All strings should be double quoted, and the body should never
+          // contain a double quote.
+          (cc == '"'.charCodeAt(0) || cc == '\''.charCodeAt(0))
+          ? escapeCssString(tok.substring(1, len - 1), escapeCssStrChar)
+          // A breaking ignorable token should is replaced with a single space.
+          : (cc == '/'.charCodeAt(0) && len > 1  // Comment.
+             || tok == '\\' || tok == CDC || tok == CDO || tok == '\ufeff'
+             // Characters in W.
+             || cc <= ' '.charCodeAt(0))
+          ? ' '
+          // Make sure that all url(...)s are double quoted.
+          : /url\(/i.test(tok)
+          ? 'url(' + escapeCssString(
+            tok.replace(URL_RE, ''),
+            escapeCssUrlChar)
+            + ')'
+          // Escapes in identifier like tokens will have been normalized above.
+          : tok;
+      // Merge adjacent space tokens.
+      if (last != tok || tok != ' ') {
+        tokens[j++] = last = tok;
+      }
+    }
+    tokens.length = j;
+    return tokens;
+  };
+})();
+
+// Exports for closure compiler.
+if (typeof window !== 'undefined') {
+  window['lexCss'] = lexCss;
+  window['decodeCss'] = decodeCss;
+}
+;
+// Copyright (C) 2010 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/**
+ * @fileoverview
+ * Implements RFC 3986 for parsing/formatting URIs.
+ *
+ * @author mikesamuel@gmail.com
+ * \@provides URI
+ * \@overrides window
+ */
+
+var URI = (function () {
+
+/**
+ * creates a uri from the string form.  The parser is relaxed, so special
+ * characters that aren't escaped but don't cause ambiguities will not cause
+ * parse failures.
+ *
+ * @return {URI|null}
+ */
+function parse(uriStr) {
+  var m = ('' + uriStr).match(URI_RE_);
+  if (!m) { return null; }
+  return new URI(
+      nullIfAbsent(m[1]),
+      nullIfAbsent(m[2]),
+      nullIfAbsent(m[3]),
+      nullIfAbsent(m[4]),
+      nullIfAbsent(m[5]),
+      nullIfAbsent(m[6]),
+      nullIfAbsent(m[7]));
+}
+
+
+/**
+ * creates a uri from the given parts.
+ *
+ * @param scheme {string} an unencoded scheme such as "http" or null
+ * @param credentials {string} unencoded user credentials or null
+ * @param domain {string} an unencoded domain name or null
+ * @param port {number} a port number in [1, 32768].
+ *    -1 indicates no port, as does null.
+ * @param path {string} an unencoded path
+ * @param query {Array.<string>|string|null} a list of unencoded cgi
+ *   parameters where even values are keys and odds the corresponding values
+ *   or an unencoded query.
+ * @param fragment {string} an unencoded fragment without the "#" or null.
+ * @return {URI}
+ */
+function create(scheme, credentials, domain, port, path, query, fragment) {
+  var uri = new URI(
+      encodeIfExists2(scheme, URI_DISALLOWED_IN_SCHEME_OR_CREDENTIALS_),
+      encodeIfExists2(
+          credentials, URI_DISALLOWED_IN_SCHEME_OR_CREDENTIALS_),
+      encodeIfExists(domain),
+      port > 0 ? port.toString() : null,
+      encodeIfExists2(path, URI_DISALLOWED_IN_PATH_),
+      null,
+      encodeIfExists(fragment));
+  if (query) {
+    if ('string' === typeof query) {
+      uri.setRawQuery(query.replace(/[^?&=0-9A-Za-z_\-~.%]/g, encodeOne));
+    } else {
+      uri.setAllParameters(query);
+    }
+  }
+  return uri;
+}
+function encodeIfExists(unescapedPart) {
+  if ('string' == typeof unescapedPart) {
+    return encodeURIComponent(unescapedPart);
+  }
+  return null;
+};
+/**
+ * if unescapedPart is non null, then escapes any characters in it that aren't
+ * valid characters in a url and also escapes any special characters that
+ * appear in extra.
+ *
+ * @param unescapedPart {string}
+ * @param extra {RegExp} a character set of characters in [\01-\177].
+ * @return {string|null} null iff unescapedPart == null.
+ */
+function encodeIfExists2(unescapedPart, extra) {
+  if ('string' == typeof unescapedPart) {
+    return encodeURI(unescapedPart).replace(extra, encodeOne);
+  }
+  return null;
+};
+/** converts a character in [\01-\177] to its url encoded equivalent. */
+function encodeOne(ch) {
+  var n = ch.charCodeAt(0);
+  return '%' + '0123456789ABCDEF'.charAt((n >> 4) & 0xf) +
+      '0123456789ABCDEF'.charAt(n & 0xf);
+}
+
+/**
+ * {@updoc
+ *  $ normPath('foo/./bar')
+ *  # 'foo/bar'
+ *  $ normPath('./foo')
+ *  # 'foo'
+ *  $ normPath('foo/.')
+ *  # 'foo'
+ *  $ normPath('foo//bar')
+ *  # 'foo/bar'
+ * }
+ */
+function normPath(path) {
+  return path.replace(/(^|\/)\.(?:\/|$)/g, '$1').replace(/\/{2,}/g, '/');
+}
+
+var PARENT_DIRECTORY_HANDLER = new RegExp(
+    ''
+    // A path break
+    + '(/|^)'
+    // followed by a non .. path element
+    // (cannot be . because normPath is used prior to this RegExp)
+    + '(?:[^./][^/]*|\\.{2,}(?:[^./][^/]*)|\\.{3,}[^/]*)'
+    // followed by .. followed by a path break.
+    + '/\\.\\.(?:/|$)');
+
+var PARENT_DIRECTORY_HANDLER_RE = new RegExp(PARENT_DIRECTORY_HANDLER);
+
+var EXTRA_PARENT_PATHS_RE = /^(?:\.\.\/)*(?:\.\.$)?/;
+
+/**
+ * Normalizes its input path and collapses all . and .. sequences except for
+ * .. sequences that would take it above the root of the current parent
+ * directory.
+ * {@updoc
+ *  $ collapse_dots('foo/../bar')
+ *  # 'bar'
+ *  $ collapse_dots('foo/./bar')
+ *  # 'foo/bar'
+ *  $ collapse_dots('foo/../bar/./../../baz')
+ *  # 'baz'
+ *  $ collapse_dots('../foo')
+ *  # '../foo'
+ *  $ collapse_dots('../foo').replace(EXTRA_PARENT_PATHS_RE, '')
+ *  # 'foo'
+ * }
+ */
+function collapse_dots(path) {
+  if (path === null) { return null; }
+  var p = normPath(path);
+  // Only /../ left to flatten
+  var r = PARENT_DIRECTORY_HANDLER_RE;
+  // We replace with $1 which matches a / before the .. because this
+  // guarantees that:
+  // (1) we have at most 1 / between the adjacent place,
+  // (2) always have a slash if there is a preceding path section, and
+  // (3) we never turn a relative path into an absolute path.
+  for (var q; (q = p.replace(r, '$1')) != p; p = q) {};
+  return p;
+}
+
+/**
+ * resolves a relative url string to a base uri.
+ * @return {URI}
+ */
+function resolve(baseUri, relativeUri) {
+  // there are several kinds of relative urls:
+  // 1. //foo - replaces everything from the domain on.  foo is a domain name
+  // 2. foo - replaces the last part of the path, the whole query and fragment
+  // 3. /foo - replaces the the path, the query and fragment
+  // 4. ?foo - replace the query and fragment
+  // 5. #foo - replace the fragment only
+
+  var absoluteUri = baseUri.clone();
+  // we satisfy these conditions by looking for the first part of relativeUri
+  // that is not blank and applying defaults to the rest
+
+  var overridden = relativeUri.hasScheme();
+
+  if (overridden) {
+    absoluteUri.setRawScheme(relativeUri.getRawScheme());
+  } else {
+    overridden = relativeUri.hasCredentials();
+  }
+
+  if (overridden) {
+    absoluteUri.setRawCredentials(relativeUri.getRawCredentials());
+  } else {
+    overridden = relativeUri.hasDomain();
+  }
+
+  if (overridden) {
+    absoluteUri.setRawDomain(relativeUri.getRawDomain());
+  } else {
+    overridden = relativeUri.hasPort();
+  }
+
+  var rawPath = relativeUri.getRawPath();
+  var simplifiedPath = collapse_dots(rawPath);
+  if (overridden) {
+    absoluteUri.setPort(relativeUri.getPort());
+    simplifiedPath = simplifiedPath
+        && simplifiedPath.replace(EXTRA_PARENT_PATHS_RE, '');
+  } else {
+    overridden = !!rawPath;
+    if (overridden) {
+      // resolve path properly
+      if (simplifiedPath.charCodeAt(0) !== 0x2f /* / */) {  // path is relative
+        var absRawPath = collapse_dots(absoluteUri.getRawPath() || '')
+            .replace(EXTRA_PARENT_PATHS_RE, '');
+        var slash = absRawPath.lastIndexOf('/') + 1;
+        simplifiedPath = collapse_dots(
+            (slash ? absRawPath.substring(0, slash) : '')
+            + collapse_dots(rawPath))
+            .replace(EXTRA_PARENT_PATHS_RE, '');
+      }
+    } else {
+      simplifiedPath = simplifiedPath
+          && simplifiedPath.replace(EXTRA_PARENT_PATHS_RE, '');
+      if (simplifiedPath !== rawPath) {
+        absoluteUri.setRawPath(simplifiedPath);
+      }
+    }
+  }
+
+  if (overridden) {
+    absoluteUri.setRawPath(simplifiedPath);
+  } else {
+    overridden = relativeUri.hasQuery();
+  }
+
+  if (overridden) {
+    absoluteUri.setRawQuery(relativeUri.getRawQuery());
+  } else {
+    overridden = relativeUri.hasFragment();
+  }
+
+  if (overridden) {
+    absoluteUri.setRawFragment(relativeUri.getRawFragment());
+  }
+
+  return absoluteUri;
+}
+
+/**
+ * a mutable URI.
+ *
+ * This class contains setters and getters for the parts of the URI.
+ * The <tt>getXYZ</tt>/<tt>setXYZ</tt> methods return the decoded part -- so
+ * <code>uri.parse('/foo%20bar').getPath()</code> will return the decoded path,
+ * <tt>/foo bar</tt>.
+ *
+ * <p>The raw versions of fields are available too.
+ * <code>uri.parse('/foo%20bar').getRawPath()</code> will return the raw path,
+ * <tt>/foo%20bar</tt>.  Use the raw setters with care, since
+ * <code>URI::toString</code> is not guaranteed to return a valid url if a
+ * raw setter was used.
+ *
+ * <p>All setters return <tt>this</tt> and so may be chained, a la
+ * <code>uri.parse('/foo').setFragment('part').toString()</code>.
+ *
+ * <p>You should not use this constructor directly -- please prefer the factory
+ * functions {@link uri.parse}, {@link uri.create}, {@link uri.resolve}
+ * instead.</p>
+ *
+ * <p>The parameters are all raw (assumed to be properly escaped) parts, and
+ * any (but not all) may be null.  Undefined is not allowed.</p>
+ *
+ * @constructor
+ */
+function URI(
+    rawScheme,
+    rawCredentials, rawDomain, port,
+    rawPath, rawQuery, rawFragment) {
+  this.scheme_ = rawScheme;
+  this.credentials_ = rawCredentials;
+  this.domain_ = rawDomain;
+  this.port_ = port;
+  this.path_ = rawPath;
+  this.query_ = rawQuery;
+  this.fragment_ = rawFragment;
+  /**
+   * @type {Array|null}
+   */
+  this.paramCache_ = null;
+}
+
+/** returns the string form of the url. */
+URI.prototype.toString = function () {
+  var out = [];
+  if (null !== this.scheme_) { out.push(this.scheme_, ':'); }
+  if (null !== this.domain_) {
+    out.push('//');
+    if (null !== this.credentials_) { out.push(this.credentials_, '@'); }
+    out.push(this.domain_);
+    if (null !== this.port_) { out.push(':', this.port_.toString()); }
+  }
+  if (null !== this.path_) { out.push(this.path_); }
+  if (null !== this.query_) { out.push('?', this.query_); }
+  if (null !== this.fragment_) { out.push('#', this.fragment_); }
+  return out.join('');
+};
+
+URI.prototype.clone = function () {
+  return new URI(this.scheme_, this.credentials_, this.domain_, this.port_,
+                 this.path_, this.query_, this.fragment_);
+};
+
+URI.prototype.getScheme = function () {
+  // HTML5 spec does not require the scheme to be lowercased but
+  // all common browsers except Safari lowercase the scheme.
+  return this.scheme_ && decodeURIComponent(this.scheme_).toLowerCase();
+};
+URI.prototype.getRawScheme = function () {
+  return this.scheme_;
+};
+URI.prototype.setScheme = function (newScheme) {
+  this.scheme_ = encodeIfExists2(
+      newScheme, URI_DISALLOWED_IN_SCHEME_OR_CREDENTIALS_);
+  return this;
+};
+URI.prototype.setRawScheme = function (newScheme) {
+  this.scheme_ = newScheme ? newScheme : null;
+  return this;
+};
+URI.prototype.hasScheme = function () {
+  return null !== this.scheme_;
+};
+
+
+URI.prototype.getCredentials = function () {
+  return this.credentials_ && decodeURIComponent(this.credentials_);
+};
+URI.prototype.getRawCredentials = function () {
+  return this.credentials_;
+};
+URI.prototype.setCredentials = function (newCredentials) {
+  this.credentials_ = encodeIfExists2(
+      newCredentials, URI_DISALLOWED_IN_SCHEME_OR_CREDENTIALS_);
+
+  return this;
+};
+URI.prototype.setRawCredentials = function (newCredentials) {
+  this.credentials_ = newCredentials ? newCredentials : null;
+  return this;
+};
+URI.prototype.hasCredentials = function () {
+  return null !== this.credentials_;
+};
+
+
+URI.prototype.getDomain = function () {
+  return this.domain_ && decodeURIComponent(this.domain_);
+};
+URI.prototype.getRawDomain = function () {
+  return this.domain_;
+};
+URI.prototype.setDomain = function (newDomain) {
+  return this.setRawDomain(newDomain && encodeURIComponent(newDomain));
+};
+URI.prototype.setRawDomain = function (newDomain) {
+  this.domain_ = newDomain ? newDomain : null;
+  // Maintain the invariant that paths must start with a slash when the URI
+  // is not path-relative.
+  return this.setRawPath(this.path_);
+};
+URI.prototype.hasDomain = function () {
+  return null !== this.domain_;
+};
+
+
+URI.prototype.getPort = function () {
+  return this.port_ && decodeURIComponent(this.port_);
+};
+URI.prototype.setPort = function (newPort) {
+  if (newPort) {
+    newPort = Number(newPort);
+    if (newPort !== (newPort & 0xffff)) {
+      throw new Error('Bad port number ' + newPort);
+    }
+    this.port_ = '' + newPort;
+  } else {
+    this.port_ = null;
+  }
+  return this;
+};
+URI.prototype.hasPort = function () {
+  return null !== this.port_;
+};
+
+
+URI.prototype.getPath = function () {
+  return this.path_ && decodeURIComponent(this.path_);
+};
+URI.prototype.getRawPath = function () {
+  return this.path_;
+};
+URI.prototype.setPath = function (newPath) {
+  return this.setRawPath(encodeIfExists2(newPath, URI_DISALLOWED_IN_PATH_));
+};
+URI.prototype.setRawPath = function (newPath) {
+  if (newPath) {
+    newPath = String(newPath);
+    this.path_ =
+      // Paths must start with '/' unless this is a path-relative URL.
+      (!this.domain_ || /^\//.test(newPath)) ? newPath : '/' + newPath;
+  } else {
+    this.path_ = null;
+  }
+  return this;
+};
+URI.prototype.hasPath = function () {
+  return null !== this.path_;
+};
+
+
+URI.prototype.getQuery = function () {
+  // From http://www.w3.org/Addressing/URL/4_URI_Recommentations.html
+  // Within the query string, the plus sign is reserved as shorthand notation
+  // for a space.
+  return this.query_ && decodeURIComponent(this.query_).replace(/\+/g, ' ');
+};
+URI.prototype.getRawQuery = function () {
+  return this.query_;
+};
+URI.prototype.setQuery = function (newQuery) {
+  this.paramCache_ = null;
+  this.query_ = encodeIfExists(newQuery);
+  return this;
+};
+URI.prototype.setRawQuery = function (newQuery) {
+  this.paramCache_ = null;
+  this.query_ = newQuery ? newQuery : null;
+  return this;
+};
+URI.prototype.hasQuery = function () {
+  return null !== this.query_;
+};
+
+/**
+ * sets the query given a list of strings of the form
+ * [ key0, value0, key1, value1, ... ].
+ *
+ * <p><code>uri.setAllParameters(['a', 'b', 'c', 'd']).getQuery()</code>
+ * will yield <code>'a=b&c=d'</code>.
+ */
+URI.prototype.setAllParameters = function (params) {
+  if (typeof params === 'object') {
+    if (!(params instanceof Array)
+        && (params instanceof Object
+            || Object.prototype.toString.call(params) !== '[object Array]')) {
+      var newParams = [];
+      var i = -1;
+      for (var k in params) {
+        var v = params[k];
+        if ('string' === typeof v) {
+          newParams[++i] = k;
+          newParams[++i] = v;
+        }
+      }
+      params = newParams;
+    }
+  }
+  this.paramCache_ = null;
+  var queryBuf = [];
+  var separator = '';
+  for (var j = 0; j < params.length;) {
+    var k = params[j++];
+    var v = params[j++];
+    queryBuf.push(separator, encodeURIComponent(k.toString()));
+    separator = '&';
+    if (v) {
+      queryBuf.push('=', encodeURIComponent(v.toString()));
+    }
+  }
+  this.query_ = queryBuf.join('');
+  return this;
+};
+URI.prototype.checkParameterCache_ = function () {
+  if (!this.paramCache_) {
+    var q = this.query_;
+    if (!q) {
+      this.paramCache_ = [];
+    } else {
+      var cgiParams = q.split(/[&\?]/);
+      var out = [];
+      var k = -1;
+      for (var i = 0; i < cgiParams.length; ++i) {
+        var m = cgiParams[i].match(/^([^=]*)(?:=(.*))?$/);
+        // From http://www.w3.org/Addressing/URL/4_URI_Recommentations.html
+        // Within the query string, the plus sign is reserved as shorthand
+        // notation for a space.
+        out[++k] = decodeURIComponent(m[1]).replace(/\+/g, ' ');
+        out[++k] = decodeURIComponent(m[2] || '').replace(/\+/g, ' ');
+      }
+      this.paramCache_ = out;
+    }
+  }
+};
+/**
+ * sets the values of the named cgi parameters.
+ *
+ * <p>So, <code>uri.parse('foo?a=b&c=d&e=f').setParameterValues('c', ['new'])
+ * </code> yields <tt>foo?a=b&c=new&e=f</tt>.</p>
+ *
+ * @param key {string}
+ * @param values {Array.<string>} the new values.  If values is a single string
+ *   then it will be treated as the sole value.
+ */
+URI.prototype.setParameterValues = function (key, values) {
+  // be nice and avoid subtle bugs where [] operator on string performs charAt
+  // on some browsers and crashes on IE
+  if (typeof values === 'string') {
+    values = [ values ];
+  }
+
+  this.checkParameterCache_();
+  var newValueIndex = 0;
+  var pc = this.paramCache_;
+  var params = [];
+  for (var i = 0, k = 0; i < pc.length; i += 2) {
+    if (key === pc[i]) {
+      if (newValueIndex < values.length) {
+        params.push(key, values[newValueIndex++]);
+      }
+    } else {
+      params.push(pc[i], pc[i + 1]);
+    }
+  }
+  while (newValueIndex < values.length) {
+    params.push(key, values[newValueIndex++]);
+  }
+  this.setAllParameters(params);
+  return this;
+};
+URI.prototype.removeParameter = function (key) {
+  return this.setParameterValues(key, []);
+};
+/**
+ * returns the parameters specified in the query part of the uri as a list of
+ * keys and values like [ key0, value0, key1, value1, ... ].
+ *
+ * @return {Array.<string>}
+ */
+URI.prototype.getAllParameters = function () {
+  this.checkParameterCache_();
+  return this.paramCache_.slice(0, this.paramCache_.length);
+};
+/**
+ * returns the value<b>s</b> for a given cgi parameter as a list of decoded
+ * query parameter values.
+ * @return {Array.<string>}
+ */
+URI.prototype.getParameterValues = function (paramNameUnescaped) {
+  this.checkParameterCache_();
+  var values = [];
+  for (var i = 0; i < this.paramCache_.length; i += 2) {
+    if (paramNameUnescaped === this.paramCache_[i]) {
+      values.push(this.paramCache_[i + 1]);
+    }
+  }
+  return values;
+};
+/**
+ * returns a map of cgi parameter names to (non-empty) lists of values.
+ * @return {Object.<string,Array.<string>>}
+ */
+URI.prototype.getParameterMap = function (paramNameUnescaped) {
+  this.checkParameterCache_();
+  var paramMap = {};
+  for (var i = 0; i < this.paramCache_.length; i += 2) {
+    var key = this.paramCache_[i++],
+      value = this.paramCache_[i++];
+    if (!(key in paramMap)) {
+      paramMap[key] = [value];
+    } else {
+      paramMap[key].push(value);
+    }
+  }
+  return paramMap;
+};
+/**
+ * returns the first value for a given cgi parameter or null if the given
+ * parameter name does not appear in the query string.
+ * If the given parameter name does appear, but has no '<tt>=</tt>' following
+ * it, then the empty string will be returned.
+ * @return {string|null}
+ */
+URI.prototype.getParameterValue = function (paramNameUnescaped) {
+  this.checkParameterCache_();
+  for (var i = 0; i < this.paramCache_.length; i += 2) {
+    if (paramNameUnescaped === this.paramCache_[i]) {
+      return this.paramCache_[i + 1];
+    }
+  }
+  return null;
+};
+
+URI.prototype.getFragment = function () {
+  return this.fragment_ && decodeURIComponent(this.fragment_);
+};
+URI.prototype.getRawFragment = function () {
+  return this.fragment_;
+};
+URI.prototype.setFragment = function (newFragment) {
+  this.fragment_ = newFragment ? encodeURIComponent(newFragment) : null;
+  return this;
+};
+URI.prototype.setRawFragment = function (newFragment) {
+  this.fragment_ = newFragment ? newFragment : null;
+  return this;
+};
+URI.prototype.hasFragment = function () {
+  return null !== this.fragment_;
+};
+
+function nullIfAbsent(matchPart) {
+  return ('string' == typeof matchPart) && (matchPart.length > 0)
+         ? matchPart
+         : null;
+}
+
+
+
+
+/**
+ * a regular expression for breaking a URI into its component parts.
+ *
+ * <p>http://www.gbiv.com/protocols/uri/rfc/rfc3986.html#RFC2234 says
+ * As the "first-match-wins" algorithm is identical to the "greedy"
+ * disambiguation method used by POSIX regular expressions, it is natural and
+ * commonplace to use a regular expression for parsing the potential five
+ * components of a URI reference.
+ *
+ * <p>The following line is the regular expression for breaking-down a
+ * well-formed URI reference into its components.
+ *
+ * <pre>
+ * ^(([^:/?#]+):)?(//([^/?#]*))?([^?#]*)(\?([^#]*))?(#(.*))?
+ *  12            3  4          5       6  7        8 9
+ * </pre>
+ *
+ * <p>The numbers in the second line above are only to assist readability; they
+ * indicate the reference points for each subexpression (i.e., each paired
+ * parenthesis). We refer to the value matched for subexpression <n> as $<n>.
+ * For example, matching the above expression to
+ * <pre>
+ *     http://www.ics.uci.edu/pub/ietf/uri/#Related
+ * </pre>
+ * results in the following subexpression matches:
+ * <pre>
+ *    $1 = http:
+ *    $2 = http
+ *    $3 = //www.ics.uci.edu
+ *    $4 = www.ics.uci.edu
+ *    $5 = /pub/ietf/uri/
+ *    $6 = <undefined>
+ *    $7 = <undefined>
+ *    $8 = #Related
+ *    $9 = Related
+ * </pre>
+ * where <undefined> indicates that the component is not present, as is the
+ * case for the query component in the above example. Therefore, we can
+ * determine the value of the five components as
+ * <pre>
+ *    scheme    = $2
+ *    authority = $4
+ *    path      = $5
+ *    query     = $7
+ *    fragment  = $9
+ * </pre>
+ *
+ * <p>msamuel: I have modified the regular expression slightly to expose the
+ * credentials, domain, and port separately from the authority.
+ * The modified version yields
+ * <pre>
+ *    $1 = http              scheme
+ *    $2 = <undefined>       credentials -\
+ *    $3 = www.ics.uci.edu   domain       | authority
+ *    $4 = <undefined>       port        -/
+ *    $5 = /pub/ietf/uri/    path
+ *    $6 = <undefined>       query without ?
+ *    $7 = Related           fragment without #
+ * </pre>
+ */
+var URI_RE_ = new RegExp(
+      "^" +
+      "(?:" +
+        "([^:/?#]+)" +         // scheme
+      ":)?" +
+      "(?://" +
+        "(?:([^/?#]*)@)?" +    // credentials
+        "([^/?#:@]*)" +        // domain
+        "(?::([0-9]+))?" +     // port
+      ")?" +
+      "([^?#]+)?" +            // path
+      "(?:\\?([^#]*))?" +      // query
+      "(?:#(.*))?" +           // fragment
+      "$"
+      );
+
+var URI_DISALLOWED_IN_SCHEME_OR_CREDENTIALS_ = /[#\/\?@]/g;
+var URI_DISALLOWED_IN_PATH_ = /[\#\?]/g;
+
+URI.parse = parse;
+URI.create = create;
+URI.resolve = resolve;
+URI.collapse_dots = collapse_dots;  // Visible for testing.
+
+// lightweight string-based api for loadModuleMaker
+URI.utils = {
+  mimeTypeOf: function (uri) {
+    var uriObj = parse(uri);
+    if (/\.html$/.test(uriObj.getPath())) {
+      return 'text/html';
+    } else {
+      return 'application/javascript';
+    }
+  },
+  resolve: function (base, uri) {
+    if (base) {
+      return resolve(parse(base), parse(uri)).toString();
+    } else {
+      return '' + uri;
+    }
+  }
+};
+
+
+return URI;
+})();
+
+// Exports for closure compiler.
+if (typeof window !== 'undefined') {
+  window['URI'] = URI;
+}
+;
+// Copyright (C) 2011 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/**
+ * @fileoverview
+ * JavaScript support for client-side CSS sanitization.
+ * The CSS property schema API is defined in CssPropertyPatterns.java which
+ * is used to generate css-defs.js.
+ *
+ * @author mikesamuel@gmail.com
+ * \@requires CSS_PROP_BIT_GLOBAL_NAME
+ * \@requires CSS_PROP_BIT_HASH_VALUE
+ * \@requires CSS_PROP_BIT_NEGATIVE_QUANTITY
+ * \@requires CSS_PROP_BIT_PROPERTY_NAME
+ * \@requires CSS_PROP_BIT_QUANTITY
+ * \@requires CSS_PROP_BIT_QSTRING
+ * \@requires CSS_PROP_BIT_UNRESERVED_WORD
+ * \@requires CSS_PROP_BIT_URL
+ * \@requires cssSchema
+ * \@requires decodeCss
+ * \@requires html4
+ * \@requires URI
+ * \@overrides window
+ * \@requires parseCssStylesheet
+ * \@provides sanitizeCssProperty
+ * \@provides sanitizeCssSelectorList
+ * \@provides sanitizeStylesheet
+ * \@provides sanitizeStylesheetWithExternals
+ * \@provides sanitizeMediaQuery
+ */
+
+var sanitizeCssProperty = undefined;
+var sanitizeCssSelectorList = undefined;
+var sanitizeStylesheet = undefined;
+var sanitizeStylesheetWithExternals = undefined;
+var sanitizeMediaQuery = undefined;
+
+(function () {
+  var NOEFFECT_URL = 'url("about:blank")';
+  /**
+   * The set of characters that need to be normalized inside url("...").
+   * We normalize newlines because they are not allowed inside quoted strings,
+   * normalize quote characters, angle-brackets, and asterisks because they
+   * could be used to break out of the URL or introduce targets for CSS
+   * error recovery.  We normalize parentheses since they delimit unquoted
+   * URLs and calls and could be a target for error recovery.
+   */
+  var NORM_URL_REGEXP = /[\n\f\r\"\'()*<>]/g;
+  /** The replacements for NORM_URL_REGEXP. */
+  var NORM_URL_REPLACEMENTS = {
+    '\n': '%0a',
+    '\f': '%0c',
+    '\r': '%0d',
+    '"':  '%22',
+    '\'': '%27',
+    '(':  '%28',
+    ')':  '%29',
+    '*':  '%2a',
+    '<':  '%3c',
+    '>':  '%3e'
+  };
+
+  function normalizeUrl(s) {
+    if ('string' === typeof s) {
+      return 'url("' + s.replace(NORM_URL_REGEXP, normalizeUrlChar) + '")';
+    } else {
+      return NOEFFECT_URL;
+    }
+  }
+  function normalizeUrlChar(ch) {
+    return NORM_URL_REPLACEMENTS[ch];
+  }
+
+  // From RFC3986
+  var URI_SCHEME_RE = new RegExp(
+      '^' +
+      '(?:' +
+        '([^:\/?# ]+)' +         // scheme
+      ':)?'
+  );
+
+  var ALLOWED_URI_SCHEMES = /^(?:https?|mailto)$/i;
+
+  function resolveUri(baseUri, uri) {
+    if (baseUri) {
+      return URI.utils.resolve(baseUri, uri);
+    }
+    return uri;
+  }
+
+  function safeUri(uri, prop, naiveUriRewriter) {
+    if (!naiveUriRewriter) { return null; }
+    var parsed = ('' + uri).match(URI_SCHEME_RE);
+    if (parsed && (!parsed[1] || ALLOWED_URI_SCHEMES.test(parsed[1]))) {
+      return naiveUriRewriter(uri, prop);
+    } else {
+      return null;
+    }
+  }
+
+  function withoutVendorPrefix(ident) {
+    // http://stackoverflow.com/a/5411098/20394 has a fairly extensive list
+    // of vendor prefices.
+    // Blink has not declared a vendor prefix distinct from -webkit-
+    // and http://css-tricks.com/tldr-on-vendor-prefix-drama/ discusses
+    // how Mozilla recognizes some -webkit-
+    // http://wiki.csswg.org/spec/vendor-prefixes talks more about
+    // cross-implementation, and lists other prefixes.
+    // Note: info is duplicated in CssValidator.java
+    return ident.replace(
+        /^-(?:apple|css|epub|khtml|moz|mso?|o|rim|wap|webkit|xv)-(?=[a-z])/, '');
+  }
+
+  /**
+   * Given a series of normalized CSS tokens, applies a property schema, as
+   * defined in CssPropertyPatterns.java, and sanitizes the tokens in place.
+   * @param property a property name.
+   * @param tokens as parsed by lexCss.  Modified in place.
+   * @param opt_naiveUriRewriter a URI rewriter; an object with a "rewrite"
+   *     function that takes a URL and returns a safe URL.
+   * @param opt_baseURI a URI against which all relative URLs in tokens will
+   *     be resolved.
+   * @param opt_idSuffix {string} appended to all IDs to scope them.
+   */
+  sanitizeCssProperty = (function () {
+
+    function unionArrays(arrs) {
+      var map = {};
+      for (var i = arrs.length; --i >= 0;) {
+        var arr = arrs[i];
+        for (var j = arr.length; --j >= 0;) {
+          map[arr[j]] = ALLOWED_LITERAL;
+        }
+      }
+      return map;
+    }
+
+    // Used as map value to avoid hasOwnProperty checks.
+    var ALLOWED_LITERAL = {};
+
+    return function sanitize(
+        property, tokens, opt_naiveUriRewriter, opt_baseUri, opt_idSuffix) {
+
+      var propertyKey = withoutVendorPrefix(property);
+      var propertySchema = cssSchema[propertyKey];
+
+      // If the property isn't recognized, elide all tokens.
+      if (!propertySchema || 'object' !== typeof propertySchema) {
+        tokens.length = 0;
+        return;
+      }
+
+      var propBits = propertySchema['cssPropBits'];
+
+      /**
+       * Recurse to apply the appropriate function schema to the function call
+       * that starts at {@code tokens[start]}.
+       * @param {Array.<string>} tokens an array of CSS token that is modified
+       *   in place so that all tokens involved in the function call
+       *   (from {@code tokens[start]} to a close parenthesis) are folded to
+       *   one token.
+       * @param {number} start an index into tokens of a function token like
+       *   {@code 'name('}.
+       * @return the replacement function or the empty string if the function
+       *   call is not both well-formed and allowed.
+       */
+      function sanitizeFunctionCall(tokens, start) {
+        var parenDepth = 1, end = start + 1, n = tokens.length;
+        while (end < n && parenDepth) {
+          var token = tokens[end++];
+          // Decrement if we see a close parenthesis, and increment if we
+          // see a function.  Since url(...) are whole tokens, they will not
+          // affect the token scanning.
+          parenDepth += (token === ')' ? -1 : /^[^"']*\($/.test(token));
+        }
+        // Allow error-recovery from unclosed functions by ignoring the call and
+        // so allowing resumption at the next ';'.
+        if (!parenDepth) {
+          var fnToken = tokens[start].toLowerCase();
+          var bareFnToken = withoutVendorPrefix(fnToken);
+          // Cut out the originals, so the caller can step by one token.
+          var fnTokens = tokens.splice(start, end - start, '');
+          var fns = propertySchema['cssFns'];
+          // Look for a function that matches the name.
+          for (var i = 0, nFns = fns.length; i < nFns; ++i) {
+            if (fns[i].substring(0, bareFnToken.length) == bareFnToken) {
+              fnTokens[0] = fnTokens[fnTokens.length - 1] = '';
+              // Recurse and sanitize the function parameters.
+              sanitize(
+                fns[i],
+                // The actual parameters to the function.
+                fnTokens,
+                opt_naiveUriRewriter, opt_baseUri);
+              // Reconstitute the function from its parameter tokens.
+              return fnToken + fnTokens.join(' ') + ')';
+            }
+          }
+        }
+        return '';
+      }
+
+      // Used to determine whether to treat quoted strings as URLs or
+      // plain text content, and whether unrecognized keywords can be quoted
+      // to treat ['Arial', 'Black'] equivalently to ['"Arial Black"'].
+      var stringDisposition =
+        propBits & (CSS_PROP_BIT_URL | CSS_PROP_BIT_UNRESERVED_WORD);
+      // Used to determine what to do with unreserved words.
+      var identDisposition =
+        propBits & (CSS_PROP_BIT_GLOBAL_NAME | CSS_PROP_BIT_PROPERTY_NAME);
+
+      // Used to join unquoted keywords into a single quoted string.
+      var lastQuoted = NaN;
+      var i = 0, k = 0;
+      for (;i < tokens.length; ++i) {
+        // Has the effect of normalizing hex digits, keywords,
+        // and function names.
+        var token = tokens[i].toLowerCase();
+        var cc = token.charCodeAt(0), cc1, cc2, isnum1, isnum2, end;
+        var litGroup, litMap;
+        token = (
+
+          // Strip out spaces.  Normally cssparser.js dumps these, but we
+          // strip them out in case the content doesn't come via cssparser.js.
+          (cc === ' '.charCodeAt(0)) ? ''
+          : (cc === '"'.charCodeAt(0)) ? (  // Quoted string.
+            (stringDisposition === CSS_PROP_BIT_URL)
+            ? (opt_naiveUriRewriter
+               // Sanitize and convert to url("...") syntax.
+               // Treat url content as case-sensitive.
+               ? (normalizeUrl(
+                   // Rewrite to a safe URI.
+                   safeUri(
+                     // Convert to absolute URL
+                     resolveUri(
+                       opt_baseUri,
+                       // Strip off quotes
+                       decodeCss(tokens[i].substring(1, token.length - 1))),
+                     propertyKey,
+                     opt_naiveUriRewriter)))
+              : '')
+            : ((propBits & CSS_PROP_BIT_QSTRING)
+               // Ambiguous when more than one bit set in disposition.
+               && !(stringDisposition & (stringDisposition - 1)))
+            ? token
+            // Drop if quoted strings not allowed.
+            : ''
+          )
+
+          // inherit is always allowed.
+          : token === 'inherit'
+          ? token
+
+          : (
+            litGroup = propertySchema['cssLitGroup'],
+            litMap = (litGroup
+                      ? (propertySchema['cssLitMap']
+                         // Lazily compute the union from litGroup.
+                         || (propertySchema['cssLitMap'] =
+                             unionArrays(litGroup)))
+                      : ALLOWED_LITERAL),  // A convenient empty object.
+            (litMap[withoutVendorPrefix(token)] === ALLOWED_LITERAL)
+          )
+          // Token is in the literal map or matches extra.
+          ? token
+
+          // Preserve hash color literals if allowed.
+          : (cc === '#'.charCodeAt(0) && /^#(?:[0-9a-f]{3}){1,2}$/.test(token))
+          ? (propBits & CSS_PROP_BIT_HASH_VALUE ? token : '')
+
+          : ('0'.charCodeAt(0) <= cc && cc <= '9'.charCodeAt(0))
+          // A number starting with a digit.
+          ? ((propBits & CSS_PROP_BIT_QUANTITY) ? token : '')
+
+          // Normalize quantities so they don't start with a '.' or '+' sign and
+          // make sure they all have an integer component so can't be confused
+          // with a dotted identifier.
+          // This can't be done in the lexer since ".4" is a valid rule part.
+          : (cc1 = token.charCodeAt(1),
+             cc2 = token.charCodeAt(2),
+             isnum1 = '0'.charCodeAt(0) <= cc1 && cc1 <= '9'.charCodeAt(0),
+             isnum2 = '0'.charCodeAt(0) <= cc2 && cc2 <= '9'.charCodeAt(0),
+             // +.5 -> 0.5 if allowed.
+             (cc === '+'.charCodeAt(0)
+              && (isnum1 || (cc1 === '.'.charCodeAt(0) && isnum2))))
+          ? ((propBits & CSS_PROP_BIT_QUANTITY)
+            ? ((isnum1 ? '' : '0') + token.substring(1))
+            : '')
+
+          // -.5 -> -0.5 if allowed otherwise -> 0 if quantities allowed.
+          : (cc === '-'.charCodeAt(0)
+             && (isnum1 || (cc1 === '.'.charCodeAt(0) && isnum2)))
+            ? ((propBits & CSS_PROP_BIT_NEGATIVE_QUANTITY)
+               ? ((isnum1 ? '-' : '-0') + token.substring(1))
+               : ((propBits & CSS_PROP_BIT_QUANTITY) ? '0' : ''))
+
+          // .5 -> 0.5 if allowed.
+          : (cc === '.'.charCodeAt(0) && isnum1)
+          ? ((propBits & CSS_PROP_BIT_QUANTITY) ? '0' + token : '')
+
+          // Handle url("...") by rewriting the body.
+          : ('url("' === token.substring(0, 5))
+          ? ((opt_naiveUriRewriter && (propBits & CSS_PROP_BIT_URL))
+             ? normalizeUrl(safeUri(resolveUri(opt_baseUri,
+                  tokens[i].substring(5, token.length - 2)),
+                  propertyKey,
+                  opt_naiveUriRewriter))
+             : '')
+
+          // Handle func(...) by recursing.
+          // Functions start at a token like "name(" and end with a ")" taking
+          // into account nesting.
+          : (token.charAt(token.length-1) === '(')
+          ? sanitizeFunctionCall(tokens, i)
+
+          : (identDisposition
+             && /^-?[a-z_][\w\-]*$/.test(token) && !/__$/.test(token))
+          ? (opt_idSuffix && identDisposition === CSS_PROP_BIT_GLOBAL_NAME
+             ? tokens[i] + opt_idSuffix  // use original token, not lowercased
+             : (identDisposition === CSS_PROP_BIT_PROPERTY_NAME
+                && cssSchema[token]
+                && 'number' === typeof cssSchema[token].cssPropBits)
+             ? token
+             : '')
+
+          : (/^\w+$/.test(token)
+             && stringDisposition === CSS_PROP_BIT_UNRESERVED_WORD
+             && (propBits & CSS_PROP_BIT_QSTRING))
+          // Quote unrecognized keywords so font names like
+          //    Arial Bold
+          // ->
+          //    "Arial Bold"
+          ? (lastQuoted+1 === k
+             // If the last token was also a keyword that was quoted, then
+             // combine this token into that.
+             ? (tokens[lastQuoted] = (
+                  tokens[lastQuoted].substring(0, tokens[lastQuoted].length-1)
+                  + ' ' + token + '"'),
+                token = '')
+             : (lastQuoted = k, '"' + token + '"'))
+
+          // Disallowed.
+          : '');
+        if (token) {
+          tokens[k++] = token;
+        }
+      }
+      // For single URL properties, if the URL failed to pass the sanitizer,
+      // then just drop it.
+      if (k === 1 && tokens[0] === NOEFFECT_URL) { k = 0; }
+      tokens.length = k;
+    };
+  })();
+
+  // Note, duplicated in CssRewriter.java
+  // Constructed from
+  //    https://developer.mozilla.org/en-US/docs/Web/CSS/Reference
+  //    https://developer.mozilla.org/en-US/docs/Web/CSS/Pseudo-classes
+  //    http://dev.w3.org/csswg/selectors4/
+  var PSEUDO_SELECTOR_WHITELIST =
+    new RegExp(
+        '^(active|after|before|blank|checked|default|disabled'
+        + '|drop|empty|enabled|first|first-child|first-letter'
+        + '|first-line|first-of-type|fullscreen|focus|hover'
+        + '|in-range|indeterminate|invalid|last-child|last-of-type'
+        + '|left|link|only-child|only-of-type|optional|out-of-range'
+        + '|placeholder-shown|read-only|read-write|required|right'
+        + '|root|scope|user-error|valid|visited'
+        + ')$');
+
+  // Set of punctuation tokens that are child/sibling selectors.
+  var COMBINATOR = {};
+  COMBINATOR['>'] = COMBINATOR['+'] = COMBINATOR['~'] = COMBINATOR;
+
+  /**
+   * Given a series of tokens, returns a list of sanitized selectors.
+   * @param {Array.<string>} selectors In the form produced by csslexer.js.
+   * @param {{
+   *     containerClass: ?string,
+   *     idSuffix: string,
+   *     tagPolicy: function(string, Array.<string>): ?Array.<string>,
+   *     virtualizeAttrName: ?function(string, string): ?string
+   *   }} virtualization An object like <pre<{
+   *   containerClass: class name prepended to all selectors to scope them (if
+   *       not null)
+   *   idSuffix: appended to all IDs to scope them
+   *   tagPolicy: As in html-sanitizer, used for rewriting element names.
+   *   virtualizeAttrName: Rewrite a single attribute name for attribute
+   *       selectors, or return null if not possible. Should be consistent
+   *       with tagPolicy if possible.
+   * }</pre>
+   *    If containerClass is {@code "sfx"} and idSuffix is {@code "-sfx"}, the
+   *    selector
+   *    {@code ["a", "#foo", " ", "b", ".bar"]} will be namespaced to
+   *    {@code [".sfx", " ", "a", "#foo-sfx", " ", "b", ".bar"]}.
+   * @param {function(Array.<string>): boolean} opt_onUntranslatableSelector
+   *     When a selector cannot be translated, this function is called with the
+   *     non-whitespace/comment tokens comprising the selector and returns a
+   *     value indicating whether to continue processing the selector list.
+   *     If it returns falsey, then processing is aborted and null is returned.
+   *     If not present or it returns truthy, then the complex selector is
+   *     dropped from the selector list.
+   * @return {Array.<string>}? an array of sanitized selectors.
+   *    Null when the untraslatable compound selector handler aborts processing.
+   */
+  sanitizeCssSelectorList = function(
+      selectors, virtualization, opt_onUntranslatableSelector) {
+    var containerClass = virtualization.containerClass;
+    var idSuffix = virtualization.idSuffix;
+    var tagPolicy = virtualization.tagPolicy;
+    var sanitized = [];
+
+    // Remove any spaces that are not operators.
+    var k = 0, i, inBrackets = 0, tok;
+    for (i = 0; i < selectors.length; ++i) {
+      tok = selectors[i];
+
+      if (
+            (tok == '(' || tok == '[') ? (++inBrackets, true)
+          : (tok == ')' || tok == ']') ? (inBrackets && --inBrackets, true)
+          : !(selectors[i] == ' '
+              && (inBrackets || COMBINATOR[selectors[i-1]] === COMBINATOR
+                  || COMBINATOR[selectors[i+1]] === COMBINATOR))
+        ) {
+        selectors[k++] = selectors[i];
+      }
+    }
+    selectors.length = k;
+
+    // Split around commas.  If there is an error in one of the comma separated
+    // bits, we throw the whole away, but the failure of one selector does not
+    // affect others except that opt_onUntranslatableSelector allows one to
+    // treat the entire output as unusable.
+    var n = selectors.length, start = 0;
+    for (i = 0; i < n; ++i) {
+      if (selectors[i] === ',') {  // TODO: ignore ',' inside brackets.
+        if (!processComplexSelector(start, i)) { return null; }
+        start = i+1;
+      }
+    }
+    if (!processComplexSelector(start, n)) { return null; }
+
+
+    function processComplexSelector(start, end) {
+      // Space around commas is not an operator.
+      if (selectors[start] === ' ') { ++start; }
+      if (end-1 !== start && selectors[end] === ' ') { --end; }
+
+      // Split the selector into element selectors, content around
+      // space (ancestor operator) and '>' (descendant operator).
+      var out = [];
+      var lastOperator = start;
+      var valid = true;  // True iff out contains a valid complex selector.
+      for (var i = start; valid && i < end; ++i) {
+        var tok = selectors[i];
+        if (COMBINATOR[tok] === COMBINATOR || tok === ' ') {
+          // We've found the end of a single link in the selector chain.
+          if (!processCompoundSelector(lastOperator, i, tok)) {
+            valid = false;
+          } else {
+            lastOperator = i+1;
+          }
+        }
+      }
+      if (!processCompoundSelector(lastOperator, end, '')) {
+        valid = false;
+      }
+
+      function processCompoundSelector(start, end, combinator) {
+        // Split the element selector into four parts.
+        // DIV.foo#bar[href]:hover
+        //    ^       ^     ^
+        // el classes attrs pseudo
+        var element, classId, attrs, pseudoSelector,
+            tok,  // The current token
+            // valid implies the parts above comprise a sanitized selector.
+            valid = true;
+        element = '';
+        if (start < end) {
+          tok = selectors[start];
+          if (tok === '*') {
+            ++start;
+            element = tok;
+          } else if (/^[a-zA-Z]/.test(tok)) {  // is an element selector
+            var decision = tagPolicy(tok.toLowerCase(), []);
+            if (decision) {
+              if ('tagName' in decision) {
+                tok = decision['tagName'];
+              }
+              ++start;
+              element = tok;
+            }
+          }
+        }
+        classId = '';
+        attrs = '';
+        pseudoSelector = '';
+        for (;valid && start < end; ++start) {
+          tok = selectors[start];
+          if (tok.charAt(0) === '#') {
+            if (/^#_|__$|[^\w#:\-]/.test(tok)) {
+              valid = false;
+            } else {
+              // Rewrite ID elements to include the suffix.
+              classId += tok + idSuffix;
+            }
+          } else if (tok === '.') {
+            if (++start < end
+                && /^[0-9A-Za-z:_\-]+$/.test(tok = selectors[start])
+                && !/^_|__$/.test(tok)) {
+              classId += '.' + tok;
+            } else {
+              valid = false;
+            }
+          } else if (start + 1 < end && selectors[start] === '[') {
+            ++start;
+            var vAttr = selectors[start++].toLowerCase();
+            // Schema lookup for type information
+            var atype = html4.ATTRIBS[element + '::' + vAttr];
+            if (atype !== +atype) { atype = html4.ATTRIBS['*::' + vAttr]; }
+
+            var rAttr;
+            // Consult policy
+            // TODO(kpreid): Making this optional is a kludge to avoid changing
+            // the public interface until we have a more well-structured design.
+            if (virtualization.virtualizeAttrName) {
+              rAttr = virtualization.virtualizeAttrName(element, vAttr);
+              if (typeof rAttr !== 'string') {
+                // rejected
+                valid = false;
+                rAttr = vAttr;
+              }
+              // don't reject even if not in schema
+              if (valid && atype !== +atype) {
+                atype = html4.atype['NONE'];
+              }
+            } else {
+              rAttr = vAttr;
+              if (atype !== +atype) {  // not permitted according to schema
+                valid = false;
+              }
+            }
+
+            var op = '', value = '', ignoreCase = false;
+            if (/^[~^$*|]?=$/.test(selectors[start])) {
+              op = selectors[start++];
+              value = selectors[start++];
+              // Quote identifier values.
+              if (/^[0-9A-Za-z:_\-]+$/.test(value)) {
+                value = '"' + value + '"';
+              } else if (value === ']') {
+                value = '""';
+                --start;
+              }
+              // Reject unquoted values.
+              if (!/^"([^\"\\]|\\.)*"$/.test(value)) {
+                valid = false;
+              }
+              ignoreCase = selectors[start] === "i";
+              if (ignoreCase) { ++start; }
+            }
+            if (selectors[start] !== ']') {
+              ++start;
+              valid = false;
+            }
+            // TODO: replace this with a lookup table that also provides a
+            // function from operator and value to testable value.
+            switch (atype) {
+            case html4.atype['CLASSES']:
+            case html4.atype['LOCAL_NAME']:
+            case html4.atype['NONE']:
+              break;
+            case html4.atype['GLOBAL_NAME']:
+            case html4.atype['ID']:
+            case html4.atype['IDREF']:
+              if ((op === '=' || op === '~=' || op === '$=')
+                  && value != '""' && !ignoreCase) {
+                // The suffix is case-sensitive, so we can't translate case
+                // ignoring matches.
+                value = '"'
+                  + value.substring(1, value.length-1) + idSuffix
+                  + '"';
+              } else if (op === '|=' || op === '') {
+                // Ok.  a|=b -> a == b || a.startsWith(b + "-") and since we
+                // use "-" to separate the suffix from the identifier, we can
+                // allow this through unmodified.
+                // Existence checks are also ok.
+              } else {
+                // Can't correctly handle prefix and substring operators
+                // without leaking information about the suffix.
+                valid = false;
+              }
+              break;
+            case html4.atype['URI']:
+            case html4.atype['URI_FRAGMENT']:
+              // URIs are rewritten, so we can't meanginfully translate URI
+              // selectors besides the common a[href] one that is used to
+              // distinguish links from naming anchors.
+              if (op !== '') { valid = false; }
+              break;
+            // TODO: IDREFS
+            default:
+              valid = false;
+            }
+            if (valid) {
+              attrs += '[' + rAttr.replace(/[^\w-]/g, '\\$&') + op + value +
+                  (ignoreCase ? ' i]' : ']');
+            }
+          } else if (start < end && selectors[start] === ':') {
+            tok = selectors[++start];
+            if (PSEUDO_SELECTOR_WHITELIST.test(tok)) {
+              pseudoSelector += ':' + tok;
+            } else {
+              break;
+            }
+          } else {
+            break;  // Unrecognized token.
+          }
+        }
+        if (start !== end) {  // Tokens not consumed.
+          valid = false;
+        }
+        if (valid) {
+          // ':' is allowed in identifiers, but is also the
+          // pseudo-selector separator, so ':' in preceding parts needs to
+          // be escaped.
+          var selector = (element + classId).replace(/[^ .*#\w-]/g, '\\$&')
+              + attrs + pseudoSelector + combinator;
+          if (selector) { out.push(selector); }
+        }
+        return valid;
+      }
+
+      if (valid) {
+        if (out.length) {
+          var safeSelector = out.join('');
+
+          // Namespace the selector so that it only matches under
+          // a node with suffix in its CLASS attribute.
+          if (containerClass !== null) {
+            safeSelector = '.' + containerClass + ' ' + safeSelector;
+          }
+
+          sanitized.push(safeSelector);
+        }  // else nothing there.
+        return true;
+      } else {
+        return !opt_onUntranslatableSelector
+          || opt_onUntranslatableSelector(selectors.slice(start, end));
+      }
+    }
+    return sanitized;
+  };
+
+  (function () {
+    var MEDIA_TYPE =
+       '(?:'
+       + 'all|aural|braille|embossed|handheld|print'
+       + '|projection|screen|speech|tty|tv'
+       + ')';
+
+    // A white-list of media features extracted from the "Pseudo-BNF" in
+    // http://dev.w3.org/csswg/mediaqueries4/#media1 and
+    // https://developer.mozilla.org/en-US/docs/Web/Guide/CSS/Media_queries
+    var MEDIA_FEATURE =
+       '(?:'
+       + '(?:min-|max-)?'
+       + '(?:' + (
+           '(?:device-)?'
+         + '(?:aspect-ratio|height|width)'
+         + '|color(?:-index)?'
+         + '|monochrome'
+         + '|orientation'
+         + '|resolution'
+       )
+       + ')'
+       + '|grid'
+       + '|hover'
+       + '|luminosity'
+       + '|pointer'
+       + '|scan'
+       + '|script'
+       + ')';
+
+    var LENGTH_UNIT = '(?:p[cxt]|[cem]m|in|dpi|dppx|dpcm|%)';
+
+    var CSS_VALUE =
+       '-?(?:'
+       + '[a-z]\\w+(?:-\\w+)*'  // An identifier
+       // A length or scalar quantity, or a rational number.
+       // dev.w3.org/csswg/mediaqueries4/#values introduces a ratio value-type
+       // to allow matching aspect ratios like "4 / 3".
+       + '|\\d+(?: / \\d+|(?:\\.\\d+)?' + LENGTH_UNIT + '?)'
+       + ')';
+
+    var MEDIA_EXPR =
+       '\\( ' + MEDIA_FEATURE + ' (?:' + ': ' + CSS_VALUE + ' )?\\)';
+
+    var MEDIA_QUERY =
+       '(?:'
+       + '(?:(?:(?:only|not) )?' + MEDIA_TYPE + '|' + MEDIA_EXPR + ')'
+       // We use 'and ?' since 'and(' is a single CSS function token while
+       // 'and (' parses to two separate tokens -- IDENT "and", DELIM "(".
+       + '(?: and ?' + MEDIA_EXPR + ')*'
+       + ')';
+
+    var STARTS_WITH_KEYWORD_REGEXP = /^\w/;
+
+    var MEDIA_QUERY_LIST_REGEXP = new RegExp(
+      '^' + MEDIA_QUERY + '(?: , ' + MEDIA_QUERY + ')*' + '$',
+      'i'
+    );
+
+    /**
+     * Sanitizes a media query as defined in
+     * http://dev.w3.org/csswg/mediaqueries4/#syntax
+     * <blockquote>
+     * Media Queries allow authors to adapt the style applied to a document
+     * based on the environment the document is being rendered in.
+     * </blockquote>
+     *
+     * @param {Array.<string>} cssTokens an array of tokens of the kind produced
+     *   by cssLexers.
+     * @return {string} a CSS media query.  This may be the empty string, or if
+     *   the input is invalid, then a query that is always false.
+     */
+    sanitizeMediaQuery = function (cssTokens) {
+      cssTokens = cssTokens.slice();
+      // Strip out space tokens.
+      var nTokens = cssTokens.length, k = 0;
+      for (var i = 0; i < nTokens; ++i) {
+        var tok = cssTokens[i];
+        if (tok != ' ') { cssTokens[k++] = tok; }
+      }
+      cssTokens.length = k;
+      var css = cssTokens.join(' ');
+      css = (
+        !css.length ? ''  // Always true per the spec.
+        : !(MEDIA_QUERY_LIST_REGEXP.test(css)) ? 'not all'  // Always false.
+        // Emit as-is if it starts with 'only', 'not' or a media type.
+        : STARTS_WITH_KEYWORD_REGEXP.test(css) ? css
+        : 'not all , ' + css  // Not ambiguous with a URL.
+      );
+      return css;
+    };
+  }());
+
+  (function () {
+
+    /**
+     * Extracts a url out of an at-import rule of the form:
+     *   \@import "mystyle.css";
+     *   \@import url("mystyle.css");
+     *
+     * Returns null if no valid url was found.
+     */
+    function cssParseUri(candidate) {
+      var string1 = /^\s*["]([^"]*)["]\s*$/;
+      var string2 = /^\s*[']([^']*)[']\s*$/;
+      var url1 = /^\s*url\s*[(]["]([^"]*)["][)]\s*$/;
+      var url2 = /^\s*url\s*[(][']([^']*)['][)]\s*$/;
+      // Not officially part of the CSS2.1 grammar
+      // but supported by Chrome
+      var url3 = /^\s*url\s*[(]([^)]*)[)]\s*$/;
+      var match;
+      if ((match = string1.exec(candidate))) {
+        return match[1];
+      } else if ((match = string2.exec(candidate))) {
+        return match[1];
+      } else if ((match = url1.exec(candidate))) {
+        return match[1];
+      } else if ((match = url2.exec(candidate))) {
+        return match[1];
+      } else if ((match = url3.exec(candidate))) {
+        return match[1];
+      }
+      return null;
+    }
+
+    /**
+     * @param {string} baseUri a string against which relative urls are
+     *    resolved.
+     * @param {string} cssText a string containing a CSS stylesheet.
+     * @param {{
+     *     containerClass: ?string,
+     *     idSuffix: string,
+     *     tagPolicy: function(string, Array.<string>): ?Array.<string>,
+     *     virtualizeAttrName: ?function(string, string): ?string
+     *   }} virtualization An object like <pre<{
+     *   containerClass: class name prepended to all selectors to scope them (if
+     *       not null)
+     *   idSuffix: appended to all IDs to scope them
+     *   tagPolicy: As in html-sanitizer, used for rewriting element names.
+     *   virtualizeAttrName: Rewrite a single attribute name for attribute
+     *       selectors, or return null if not possible. Should be consistent
+     *       with tagPolicy if possible. Optional.
+     * }</pre>
+     *    If containerClass is {@code "sfx"} and idSuffix is {@code "-sfx"}, the
+     *    selector
+     *    {@code ["a", "#foo", " ", "b", ".bar"]} will be namespaced to
+     *    {@code [".sfx", " ", "a", "#foo-sfx", " ", "b", ".bar"]}.
+     * @param {function(string, string)} naiveUriRewriter maps URLs of media
+     *    (images, sounds) that appear as CSS property values to sanitized
+     *    URLs or null if the URL should not be allowed as an external media
+     *    file in sanitized CSS.
+     * @param {undefined|function({toString: function ():string}, boolean)}
+     *     continuation
+     *     callback that receives the result of loading imported CSS.
+     *     The callback is called with
+     *     (cssContent : function ():string, moreToCome : boolean)
+     *     where cssContent is the CSS at the imported URL, and moreToCome is
+     *     true when the external URL itself loaded other external URLs.
+     *     If the output of the original call is stringified when moreToCome is
+     *     false, then it will be complete.
+     * @param {Array.<number>} opt_importCount the number of imports that need
+     *     to be satisfied before there is no more pending content.
+     * @return {{result:{toString:function ():string},moreToCome:boolean}}
+     *     the CSS text, and a flag that indicates whether there are pending
+     *     imports that will be passed to continuation.
+     */
+    function sanitizeStylesheetInternal(
+        baseUri, cssText, virtualization, naiveUriRewriter, naiveUriFetcher,
+        continuation, opt_importCount) {
+      var safeCss = void 0;
+      // Return a result with moreToCome===true when the last import has been
+      // sanitized.
+      var importCount = opt_importCount || [0];
+      // A stack describing the { ... } regions.
+      // Null elements indicate blocks that should not be emitted.
+      var blockStack = [];
+      // True when the content of the current block should be left off safeCss.
+      var elide = false;
+      parseCssStylesheet(
+          cssText,
+          {
+            'startStylesheet': function () {
+              safeCss = [];
+            },
+            'endStylesheet': function () {
+            },
+            'startAtrule': function (atIdent, headerArray) {
+              if (elide) {
+                atIdent = null;
+              } else if (atIdent === '@media') {
+                safeCss.push('@media', ' ', sanitizeMediaQuery(headerArray));
+              } else if (atIdent === '@keyframes'
+                         || atIdent === '@-webkit-keyframes') {
+                var animationId = headerArray[0];
+                if (headerArray.length === 1
+                    && !/__$|[^\w\-]/.test(animationId)) {
+                  safeCss.push(
+                      atIdent, ' ', animationId + virtualization.idSuffix);
+                  atIdent = '@keyframes';
+                } else {
+                  atIdent = null;
+                }
+              } else {
+                if (atIdent === '@import' && headerArray.length > 0) {
+                  atIdent = null;
+                  if ('function' === typeof continuation) {
+                    var mediaQuery = sanitizeMediaQuery(headerArray.slice(1));
+                    if (mediaQuery !== 'not all') {
+                      ++importCount[0];
+                      var placeholder = [];
+                      safeCss.push(placeholder);
+                      var cssUrl = safeUri(
+                          resolveUri(baseUri, cssParseUri(headerArray[0])),
+                          function(result) {
+                            var sanitized = sanitizeStylesheetInternal(
+                                cssUrl, result.html, virtualization,
+                                naiveUriRewriter, naiveUriFetcher,
+                                continuation, importCount);
+                            --importCount[0];
+                            var safeImportedCss = mediaQuery
+                              ? {
+                                toString: function () {
+                                  return (
+                                    '@media ' + mediaQuery + ' {'
+                                    + sanitized.result + '}'
+                                  );
+                                }
+                              }
+                              : sanitized.result;
+                            placeholder[0] = safeImportedCss;
+                            continuation(safeImportedCss, !!importCount[0]);
+                          },
+                          naiveUriFetcher);
+                    }
+                  } else {
+                    // TODO: Use a logger instead.
+                    if (window.console) {
+                      window.console.log(
+                          '@import ' + headerArray.join(' ') + ' elided');
+                    }
+                  }
+                }
+              }
+              elide = !atIdent;
+              blockStack.push(atIdent);
+            },
+            'endAtrule': function () {
+              blockStack.pop();
+              if (!elide) {
+                safeCss.push(';');
+              }
+              checkElide();
+            },
+            'startBlock': function () {
+              // There are no bare blocks in CSS, so we do not change the
+              // block stack here, but instead in the events that bracket
+              // blocks.
+              if (!elide) {
+                safeCss.push('{');
+              }
+            },
+            'endBlock': function () {
+              if (!elide) {
+                safeCss.push('}');
+                elide = true;  // skip any semicolon from endAtRule.
+              }
+            },
+            'startRuleset': function (selectorArray) {
+              if (!elide) {
+                var selector = void 0;
+                if (blockStack[blockStack.length - 1] === '@keyframes') {
+                  // Allow [from | to | <percentage>]
+                  selector = selectorArray.join(' ')
+                    .match(/^ *(?:from|to|\d+(?:\.\d+)?%) *(?:, *(?:from|to|\d+(?:\.\d+)?%) *)*$/i);
+                  elide = !selector;
+                  if (selector) { selector = selector[0].replace(/ +/g, ''); }
+                } else {
+                  var selectors = sanitizeCssSelectorList(
+                      selectorArray, virtualization);
+                  if (!selectors || !selectors.length) {
+                    elide = true;
+                  } else {
+                    selector = selectors.join(', ');
+                  }
+                }
+                if (!elide) {
+                  safeCss.push(selector, '{');
+                }
+              }
+              blockStack.push(null);
+            },
+            'endRuleset': function () {
+              blockStack.pop();
+              if (!elide) {
+                safeCss.push('}');
+              }
+              checkElide();
+            },
+            'declaration': function (property, valueArray) {
+              if (!elide) {
+                var isImportant = false;
+                var nValues = valueArray.length;
+                if (nValues >= 2
+                    && valueArray[nValues - 2] === '!'
+                    && valueArray[nValues - 1].toLowerCase() === 'important') {
+                  isImportant = true;
+                  valueArray.length -= 2;
+                }
+                sanitizeCssProperty(
+                    property, valueArray, naiveUriRewriter, baseUri,
+                    virtualization.idSuffix);
+                if (valueArray.length) {
+                  safeCss.push(
+                      property, ':', valueArray.join(' '),
+                      isImportant ? ' !important;' : ';');
+                }
+              }
+            }
+          });
+      function checkElide() {
+        elide = blockStack.length && blockStack[blockStack.length-1] === null;
+      }
+      return {
+        result : { toString: function () { return safeCss.join(''); } },
+        moreToCome : !!importCount[0]
+      };
+    }
+
+    sanitizeStylesheet = function (
+        baseUri, cssText, virtualization, naiveUriRewriter) {
+      return sanitizeStylesheetInternal(
+          baseUri, cssText, virtualization,
+          naiveUriRewriter, undefined, undefined).result.toString();
+    };
+
+    sanitizeStylesheetWithExternals = function (
+        baseUri, cssText, virtualization, naiveUriRewriter, naiveUriFetcher,
+        continuation) {
+      return sanitizeStylesheetInternal(
+          baseUri, cssText, virtualization,
+          naiveUriRewriter, naiveUriFetcher, continuation);
+    };
+  })();
+})();
+
+// Exports for closure compiler.
+if (typeof window !== 'undefined') {
+  window['sanitizeCssProperty'] = sanitizeCssProperty;
+  window['sanitizeCssSelectorList'] = sanitizeCssSelectorList;
+  window['sanitizeStylesheet'] = sanitizeStylesheet;
+  window['sanitizeMediaQuery'] = sanitizeMediaQuery;
+}
+;
+// Copyright (C) 2010 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/**
+ * @fileoverview
+ * Utilities for dealing with CSS source code.
+ *
+ * @author mikesamuel@gmail.com
+ * \@requires lexCss
+ * \@overrides window
+ * \@provides parseCssStylesheet, parseCssDeclarations
+ */
+
+// The Turkish i seems to be a non-issue, but abort in case it is.
+if ('I'.toLowerCase() !== 'i') { throw 'I/i problem'; }
+
+/**
+ * parseCssStylesheet takes a chunk of CSS text and a handler object with
+ * methods that it calls as below:
+ * <pre>
+ * // At the beginning of a stylesheet.
+ * handler.startStylesheet();
+ *
+ * // For an @foo rule ended by a semicolon: @import "foo.css";
+ * handler.startAtrule('@import', ['"foo.css"']);
+ * handler.endAtrule();
+ *
+ * // For an @foo rule ended with a block. @media print { ... }
+ * handler.startAtrule('@media', ['print']);
+ * handler.startBlock();
+ * // Calls to contents elided.  Probably selectors and declarations as below.
+ * handler.endBlock();
+ * handler.endAtrule();
+ *
+ * // For a ruleset: p.clazz q, s { color: blue; }
+ * handler.startRuleset(['p', '.', 'clazz', ' ', 'q', ',', ' ', 's']);
+ * handler.declaration('color', ['blue']);
+ * handler.endRuleset();
+ *
+ * // At the end of a stylesheet.
+ * handler.endStylesheet();
+ * </pre>
+ * When errors are encountered, the parser drops the useless tokens and
+ * attempts to resume parsing.
+ *
+ * @param {string} cssText CSS3 content to parse as a stylesheet.
+ * @param {Object} handler An object like <pre>{
+ *   startStylesheet: function () { ... },
+ *   endStylesheet: function () { ... },
+ *   startAtrule: function (atIdent, headerArray) { ... },
+ *   endAtrule: function () { ... },
+ *   startBlock: function () { ... },
+ *   endBlock: function () { ... },
+ *   startRuleset: function (selectorArray) { ... },
+ *   endRuleset: function () { ... },
+ *   declaration: function (property, valueArray) { ... },
+ * }</pre>
+ */
+var parseCssStylesheet;
+
+/**
+ * parseCssDeclarations parses a run of declaration productions as seen in the
+ * body of the HTML5 {@code style} attribute.
+ *
+ * @param {string} cssText CSS3 content to parse as a run of declarations.
+ * @param {Object} handler An object like <pre>{
+ *   declaration: function (property, valueArray) { ... },
+ * }</pre>
+ */
+var parseCssDeclarations;
+
+(function () {
+  // stylesheet  : [ CDO | CDC | S | statement ]*;
+  parseCssStylesheet = function(cssText, handler) {
+    var toks = lexCss(cssText);
+    if (handler['startStylesheet']) { handler['startStylesheet'](); }
+    for (var i = 0, n = toks.length; i < n;) {
+      // CDO and CDC ("<!--" and "-->") are converted to space by the lexer.
+      i = toks[i] === ' ' ? i+1 : statement(toks, i, n, handler);
+    }
+    if (handler['endStylesheet']) { handler['endStylesheet'](); }
+  };
+
+  // statement   : ruleset | at-rule;
+  function statement(toks, i, n, handler) {
+    if (i < n) {
+      var tok = toks[i];
+      if (tok.charAt(0) === '@') {
+        return atrule(toks, i, n, handler, true);
+      } else {
+        return ruleset(toks, i, n, handler);
+      }
+    } else {
+      return i;
+    }
+  }
+
+  // at-rule     : ATKEYWORD S* any* [ block | ';' S* ];
+  function atrule(toks, i, n, handler, blockok) {
+    var start = i++;
+    while (i < n && toks[i] !== '{' && toks[i] !== ';') {
+      ++i;
+    }
+    if (i < n && (blockok || toks[i] === ';')) {
+      var s = start+1, e = i;
+      if (s < n && toks[s] === ' ') { ++s; }
+      if (e > s && toks[e-1] === ' ') { --e; }
+      if (handler['startAtrule']) {
+        handler['startAtrule'](toks[start].toLowerCase(), toks.slice(s, e));
+      }
+      i = (toks[i] === '{')
+          ? block(toks, i, n, handler)
+          : i+1;  // Skip over ';'
+      if (handler['endAtrule']) {
+        handler['endAtrule']();
+      }
+    }
+    // Else we reached end of input or are missing a semicolon.
+    // Drop the rule on the floor.
+    return i;
+  }
+
+  // block       : '{' S* [ any | block | ATKEYWORD S* | ';' S* ]* '}' S*;
+   // Assumes the leading '{' has been verified by callers.
+  function block(toks, i, n, handler) {
+    ++i; //  skip over '{'
+    if (handler['startBlock']) { handler['startBlock'](); }
+    while (i < n) {
+      var ch = toks[i].charAt(0);
+      if (ch == '}') {
+        ++i;
+        break;
+      }
+      if (ch === ' ' || ch === ';') {
+        i = i+1;
+      } else if (ch === '@') {
+        i = atrule(toks, i, n, handler, false);
+      } else if (ch === '{') {
+        i = block(toks, i, n, handler);
+      } else {
+        // Instead of using (any* block) to subsume ruleset we allow either
+        // blocks or rulesets with a non-blank selector.
+        // This is more restrictive but does not require atrule specific
+        // parse tree fixup to realize that the contents of the block in
+        //    @media print { ... }
+        // is a ruleset.  We just don't care about any block carrying at-rules
+        // whose body content is not ruleset content.
+        i = ruleset(toks, i, n, handler);
+      }
+    }
+    if (handler['endBlock']) { handler['endBlock'](); }
+    return i;
+  }
+
+  // ruleset    : selector? '{' S* declaration? [ ';' S* declaration? ]* '}' S*;
+  function ruleset(toks, i, n, handler) {
+    // toks[s:e] are the selector tokens including internal whitespace.
+    var s = i, e = selector(toks, i, n, true);
+    if (e < 0) {
+      // Skip malformed content per selector calling convention.
+      e = ~e;
+      // Make sure we skip at least one token.
+      return e === s ? e+1 : e;
+    }
+    var tok = toks[e];
+    if (tok !== '{') {
+      // Make sure we skip at least one token.
+      return e === s ? e+1 : e;
+    }
+    i = e+1;  // Skip over '{'
+    // Don't include any trailing space in the selector slice.
+    if (e > s && toks[e-1] === ' ') { --e; }
+    if (handler['startRuleset']) {
+      handler['startRuleset'](toks.slice(s, e));
+    }
+    while (i < n) {
+      tok = toks[i];
+      if (tok === '}') {
+        ++i;
+        break;
+      }
+      if (tok === ' ') {
+        i = i+1;
+      } else {
+        i = declaration(toks, i, n, handler);
+      }
+    }
+    if (handler['endRuleset']) {
+      handler['endRuleset']();
+    }
+    return i;
+  }
+
+  // selector    : any+;
+  // any         : [ IDENT | NUMBER | PERCENTAGE | DIMENSION | STRING
+  //               | DELIM | URI | HASH | UNICODE-RANGE | INCLUDES
+  //               | FUNCTION S* any* ')' | DASHMATCH | '(' S* any* ')'
+  //               | '[' S* any* ']' ] S*;
+  // A negative return value, rv, indicates the selector was malformed and
+  // the index at which we stopped is ~rv.
+  function selector(toks, i, n, allowSemi) {
+    var s = i;
+    // The definition of any above can be summed up as
+    //   "any run of token except ('[', ']', '(', ')', ':', ';', '{', '}')
+    //    or nested runs of parenthesized tokens or square bracketed tokens".
+    // Spaces are significant in the selector.
+    // Selector is used as (selector?) so the below looks for (any*) for
+    // simplicity.
+    var tok;
+    // Keeping a stack pointer actually causes this to minify better since
+    // ".length" and ".push" are a lo of chars.
+    var brackets = [], stackLast = -1;
+    for (;i < n; ++i) {
+      tok = toks[i].charAt(0);
+      if (tok === '[' || tok === '(') {
+        brackets[++stackLast] = tok;
+      } else if ((tok === ']' && brackets[stackLast] === '[') ||
+                 (tok === ')' && brackets[stackLast] === '(')) {
+        --stackLast;
+      } else if (tok === '{' || tok === '}' || tok === ';' || tok === '@'
+                 || (tok === ':' && !allowSemi)) {
+        break;
+      }
+    }
+    if (stackLast >= 0) {
+      // Returns the bitwise inverse of i+1 to indicate an error in the
+      // token stream so that clients can ignore it.
+      i = ~(i+1);
+    }
+    return i;
+  }
+
+  var ident = /^-?[a-z]/i;
+
+  function skipDeclaration(toks, i, n) {
+    // TODO(felix8a): maybe skip balanced pairs of {}
+    while (i < n && toks[i] !== ';' && toks[i] !== '}') { ++i; }
+    return i < n && toks[i] === ';' ? i+1 : i;
+  }
+
+  // declaration : property ':' S* value;
+  // property    : IDENT S*;
+  // value       : [ any | block | ATKEYWORD S* ]+;
+  function declaration(toks, i, n, handler) {
+    var property = toks[i++];
+    if (!ident.test(property)) {
+      return skipDeclaration(toks, i, n);
+    }
+    var tok;
+    if (i < n && toks[i] === ' ') { ++i; }
+    if (i == n || toks[i] !== ':') {
+      return skipDeclaration(toks, i, n);
+    }
+    ++i;
+    if (i < n && toks[i] === ' ') { ++i; }
+
+    // None of the rules we care about want atrules or blocks in value, so
+    // we look for any+ but that is the same as selector but not zero-length.
+    // This gets us the benefit of not emitting any value with mismatched
+    // brackets.
+    var s = i, e = selector(toks, i, n, false);
+    if (e < 0) {
+      // Skip malformed content per selector calling convention.
+      e = ~e;
+    } else {
+      var value = [], valuelen = 0;
+      for (var j = s; j < e; ++j) {
+        tok = toks[j];
+        if (tok !== ' ') {
+          value[valuelen++] = tok;
+        }
+      }
+      // One of the following is now true:
+      // (1) e is flush with the end of the tokens as in <... style="x:y">.
+      // (2) tok[e] points to a ';' in which case we need to consume the semi.
+      // (3) tok[e] points to a '}' in which case we don't consume it.
+      // (4) else there is bogus unparsed value content at toks[e:].
+      // Allow declaration flush with end for style attr body.
+      if (e < n) {  // 2, 3, or 4
+        do {
+          tok = toks[e];
+          if (tok === ';' || tok === '}') { break; }
+          // Don't emit the property if there is questionable trailing content.
+          valuelen = 0;
+        } while (++e < n);
+        if (tok === ';') {
+          ++e;
+        }
+      }
+      if (valuelen && handler['declaration']) {
+        // TODO: coerce non-keyword ident tokens to quoted strings.
+        handler['declaration'](property.toLowerCase(), value);
+      }
+    }
+    return e;
+  }
+
+  parseCssDeclarations = function(cssText, handler) {
+    var toks = lexCss(cssText);
+    for (var i = 0, n = toks.length; i < n;) {
+      i = toks[i] !== ' ' ? declaration(toks, i, n, handler) : i+1;
+    }
+  };
+})();
+
+// Exports for closure compiler.
+if (typeof window !== 'undefined') {
+  window['parseCssStylesheet'] = parseCssStylesheet;
+  window['parseCssDeclarations'] = parseCssDeclarations;
+}
+;
+// Copyright Google Inc.
+// Licensed under the Apache Licence Version 2.0
+// Autogenerated at Mon Mar 23 15:26:17 CET 2015
+// @overrides window
+// @provides html4
+var html4 = {};
+html4.atype = {
+  'NONE': 0,
+  'URI': 1,
+  'URI_FRAGMENT': 11,
+  'SCRIPT': 2,
+  'STYLE': 3,
+  'HTML': 12,
+  'ID': 4,
+  'IDREF': 5,
+  'IDREFS': 6,
+  'GLOBAL_NAME': 7,
+  'LOCAL_NAME': 8,
+  'CLASSES': 9,
+  'FRAME_TARGET': 10,
+  'MEDIA_QUERY': 13
+};
+html4[ 'atype' ] = html4.atype;
+html4.ATTRIBS = {
+  '*::class': 9,
+  '*::dir': 0,
+  '*::draggable': 0,
+  '*::hidden': 0,
+  '*::id': 4,
+  '*::inert': 0,
+  '*::itemprop': 0,
+  '*::itemref': 6,
+  '*::itemscope': 0,
+  '*::lang': 0,
+  '*::onblur': 2,
+  '*::onchange': 2,
+  '*::onclick': 2,
+  '*::ondblclick': 2,
+  '*::onerror': 2,
+  '*::onfocus': 2,
+  '*::onkeydown': 2,
+  '*::onkeypress': 2,
+  '*::onkeyup': 2,
+  '*::onload': 2,
+  '*::onmousedown': 2,
+  '*::onmousemove': 2,
+  '*::onmouseout': 2,
+  '*::onmouseover': 2,
+  '*::onmouseup': 2,
+  '*::onreset': 2,
+  '*::onscroll': 2,
+  '*::onselect': 2,
+  '*::onsubmit': 2,
+  '*::ontouchcancel': 2,
+  '*::ontouchend': 2,
+  '*::ontouchenter': 2,
+  '*::ontouchleave': 2,
+  '*::ontouchmove': 2,
+  '*::ontouchstart': 2,
+  '*::onunload': 2,
+  '*::spellcheck': 0,
+  '*::style': 3,
+  '*::tabindex': 0,
+  '*::title': 0,
+  '*::translate': 0,
+  'a::accesskey': 0,
+  'a::coords': 0,
+  'a::href': 1,
+  'a::hreflang': 0,
+  'a::name': 7,
+  'a::onblur': 2,
+  'a::onfocus': 2,
+  'a::shape': 0,
+  'a::target': 0,
+  'a::type': 0,
+  'area::accesskey': 0,
+  'area::alt': 0,
+  'area::coords': 0,
+  'area::href': 1,
+  'area::nohref': 0,
+  'area::onblur': 2,
+  'area::onfocus': 2,
+  'area::shape': 0,
+  'area::target': 10,
+  'audio::controls': 0,
+  'audio::loop': 0,
+  'audio::mediagroup': 5,
+  'audio::muted': 0,
+  'audio::preload': 0,
+  'audio::src': 1,
+  'bdo::dir': 0,
+  'blockquote::cite': 1,
+  'br::clear': 0,
+  'button::accesskey': 0,
+  'button::disabled': 0,
+  'button::name': 8,
+  'button::onblur': 2,
+  'button::onfocus': 2,
+  'button::type': 0,
+  'button::value': 0,
+  'canvas::height': 0,
+  'canvas::width': 0,
+  'caption::align': 0,
+  'col::align': 0,
+  'col::char': 0,
+  'col::charoff': 0,
+  'col::span': 0,
+  'col::valign': 0,
+  'col::width': 0,
+  'colgroup::align': 0,
+  'colgroup::char': 0,
+  'colgroup::charoff': 0,
+  'colgroup::span': 0,
+  'colgroup::valign': 0,
+  'colgroup::width': 0,
+  'command::checked': 0,
+  'command::command': 5,
+  'command::disabled': 0,
+  'command::icon': 1,
+  'command::label': 0,
+  'command::radiogroup': 0,
+  'command::type': 0,
+  'data::value': 0,
+  'del::cite': 1,
+  'del::datetime': 0,
+  'details::open': 0,
+  'dir::compact': 0,
+  'div::align': 0,
+  'dl::compact': 0,
+  'fieldset::disabled': 0,
+  'font::color': 0,
+  'font::face': 0,
+  'font::size': 0,
+  'form::accept': 0,
+  'form::action': 1,
+  'form::autocomplete': 0,
+  'form::enctype': 0,
+  'form::method': 0,
+  'form::name': 7,
+  'form::novalidate': 0,
+  'form::onreset': 2,
+  'form::onsubmit': 2,
+  'form::target': 10,
+  'h1::align': 0,
+  'h2::align': 0,
+  'h3::align': 0,
+  'h4::align': 0,
+  'h5::align': 0,
+  'h6::align': 0,
+  'hr::align': 0,
+  'hr::noshade': 0,
+  'hr::size': 0,
+  'hr::width': 0,
+  'iframe::align': 0,
+  'iframe::frameborder': 0,
+  'iframe::height': 0,
+  'iframe::marginheight': 0,
+  'iframe::marginwidth': 0,
+  'iframe::width': 0,
+  'img::align': 0,
+  'img::alt': 0,
+  'img::border': 0,
+  'img::height': 0,
+  'img::hspace': 0,
+  'img::ismap': 0,
+  'img::name': 7,
+  'img::src': 1,
+  'img::usemap': 11,
+  'img::vspace': 0,
+  'img::width': 0,
+  'input::accept': 0,
+  'input::accesskey': 0,
+  'input::align': 0,
+  'input::alt': 0,
+  'input::autocomplete': 0,
+  'input::checked': 0,
+  'input::disabled': 0,
+  'input::inputmode': 0,
+  'input::ismap': 0,
+  'input::list': 5,
+  'input::max': 0,
+  'input::maxlength': 0,
+  'input::min': 0,
+  'input::multiple': 0,
+  'input::name': 8,
+  'input::onblur': 2,
+  'input::onchange': 2,
+  'input::onfocus': 2,
+  'input::onselect': 2,
+  'input::pattern': 0,
+  'input::placeholder': 0,
+  'input::readonly': 0,
+  'input::required': 0,
+  'input::size': 0,
+  'input::src': 1,
+  'input::step': 0,
+  'input::type': 0,
+  'input::usemap': 11,
+  'input::value': 0,
+  'ins::cite': 1,
+  'ins::datetime': 0,
+  'label::accesskey': 0,
+  'label::for': 5,
+  'label::onblur': 2,
+  'label::onfocus': 2,
+  'legend::accesskey': 0,
+  'legend::align': 0,
+  'li::type': 0,
+  'li::value': 0,
+  'map::name': 7,
+  'menu::compact': 0,
+  'menu::label': 0,
+  'menu::type': 0,
+  'meter::high': 0,
+  'meter::low': 0,
+  'meter::max': 0,
+  'meter::min': 0,
+  'meter::value': 0,
+  'ol::compact': 0,
+  'ol::reversed': 0,
+  'ol::start': 0,
+  'ol::type': 0,
+  'optgroup::disabled': 0,
+  'optgroup::label': 0,
+  'option::disabled': 0,
+  'option::label': 0,
+  'option::selected': 0,
+  'option::value': 0,
+  'output::for': 6,
+  'output::name': 8,
+  'p::align': 0,
+  'pre::width': 0,
+  'progress::max': 0,
+  'progress::min': 0,
+  'progress::value': 0,
+  'q::cite': 1,
+  'select::autocomplete': 0,
+  'select::disabled': 0,
+  'select::multiple': 0,
+  'select::name': 8,
+  'select::onblur': 2,
+  'select::onchange': 2,
+  'select::onfocus': 2,
+  'select::required': 0,
+  'select::size': 0,
+  'source::type': 0,
+  'table::align': 0,
+  'table::bgcolor': 0,
+  'table::border': 0,
+  'table::cellpadding': 0,
+  'table::cellspacing': 0,
+  'table::frame': 0,
+  'table::rules': 0,
+  'table::summary': 0,
+  'table::width': 0,
+  'tbody::align': 0,
+  'tbody::char': 0,
+  'tbody::charoff': 0,
+  'tbody::valign': 0,
+  'td::abbr': 0,
+  'td::align': 0,
+  'td::axis': 0,
+  'td::bgcolor': 0,
+  'td::char': 0,
+  'td::charoff': 0,
+  'td::colspan': 0,
+  'td::headers': 6,
+  'td::height': 0,
+  'td::nowrap': 0,
+  'td::rowspan': 0,
+  'td::scope': 0,
+  'td::valign': 0,
+  'td::width': 0,
+  'textarea::accesskey': 0,
+  'textarea::autocomplete': 0,
+  'textarea::cols': 0,
+  'textarea::disabled': 0,
+  'textarea::inputmode': 0,
+  'textarea::name': 8,
+  'textarea::onblur': 2,
+  'textarea::onchange': 2,
+  'textarea::onfocus': 2,
+  'textarea::onselect': 2,
+  'textarea::placeholder': 0,
+  'textarea::readonly': 0,
+  'textarea::required': 0,
+  'textarea::rows': 0,
+  'textarea::wrap': 0,
+  'tfoot::align': 0,
+  'tfoot::char': 0,
+  'tfoot::charoff': 0,
+  'tfoot::valign': 0,
+  'th::abbr': 0,
+  'th::align': 0,
+  'th::axis': 0,
+  'th::bgcolor': 0,
+  'th::char': 0,
+  'th::charoff': 0,
+  'th::colspan': 0,
+  'th::headers': 6,
+  'th::height': 0,
+  'th::nowrap': 0,
+  'th::rowspan': 0,
+  'th::scope': 0,
+  'th::valign': 0,
+  'th::width': 0,
+  'thead::align': 0,
+  'thead::char': 0,
+  'thead::charoff': 0,
+  'thead::valign': 0,
+  'tr::align': 0,
+  'tr::bgcolor': 0,
+  'tr::char': 0,
+  'tr::charoff': 0,
+  'tr::valign': 0,
+  'track::default': 0,
+  'track::kind': 0,
+  'track::label': 0,
+  'track::srclang': 0,
+  'ul::compact': 0,
+  'ul::type': 0,
+  'video::controls': 0,
+  'video::height': 0,
+  'video::loop': 0,
+  'video::mediagroup': 5,
+  'video::muted': 0,
+  'video::poster': 1,
+  'video::preload': 0,
+  'video::src': 1,
+  'video::width': 0
+};
+html4[ 'ATTRIBS' ] = html4.ATTRIBS;
+html4.eflags = {
+  'OPTIONAL_ENDTAG': 1,
+  'EMPTY': 2,
+  'CDATA': 4,
+  'RCDATA': 8,
+  'UNSAFE': 16,
+  'FOLDABLE': 32,
+  'SCRIPT': 64,
+  'STYLE': 128,
+  'VIRTUALIZED': 256
+};
+html4[ 'eflags' ] = html4.eflags;
+html4.ELEMENTS = {
+  'a': 0,
+  'abbr': 0,
+  'acronym': 0,
+  'address': 0,
+  'applet': 272,
+  'area': 2,
+  'article': 0,
+  'aside': 0,
+  'audio': 0,
+  'b': 0,
+  'base': 274,
+  'basefont': 274,
+  'bdi': 0,
+  'bdo': 0,
+  'big': 0,
+  'blockquote': 0,
+  'body': 305,
+  'br': 2,
+  'button': 0,
+  'canvas': 0,
+  'caption': 0,
+  'center': 0,
+  'cite': 0,
+  'code': 0,
+  'col': 2,
+  'colgroup': 1,
+  'command': 2,
+  'data': 0,
+  'datalist': 0,
+  'dd': 1,
+  'del': 0,
+  'details': 0,
+  'dfn': 0,
+  'dialog': 272,
+  'dir': 0,
+  'div': 0,
+  'dl': 0,
+  'dt': 1,
+  'em': 0,
+  'fieldset': 0,
+  'figcaption': 0,
+  'figure': 0,
+  'font': 0,
+  'footer': 0,
+  'form': 0,
+  'frame': 274,
+  'frameset': 272,
+  'h1': 0,
+  'h2': 0,
+  'h3': 0,
+  'h4': 0,
+  'h5': 0,
+  'h6': 0,
+  'head': 305,
+  'header': 0,
+  'hgroup': 0,
+  'hr': 2,
+  'html': 305,
+  'i': 0,
+  'iframe': 4,
+  'img': 2,
+  'input': 2,
+  'ins': 0,
+  'isindex': 274,
+  'kbd': 0,
+  'keygen': 274,
+  'label': 0,
+  'legend': 0,
+  'li': 1,
+  'link': 274,
+  'map': 0,
+  'mark': 0,
+  'menu': 0,
+  'meta': 274,
+  'meter': 0,
+  'nav': 0,
+  'nobr': 0,
+  'noembed': 276,
+  'noframes': 276,
+  'noscript': 276,
+  'object': 272,
+  'ol': 0,
+  'optgroup': 0,
+  'option': 1,
+  'output': 0,
+  'p': 1,
+  'param': 274,
+  'pre': 0,
+  'progress': 0,
+  'q': 0,
+  's': 0,
+  'samp': 0,
+  'script': 84,
+  'section': 0,
+  'select': 0,
+  'small': 0,
+  'source': 2,
+  'span': 0,
+  'strike': 0,
+  'strong': 0,
+  'style': 148,
+  'sub': 0,
+  'summary': 0,
+  'sup': 0,
+  'table': 0,
+  'tbody': 1,
+  'td': 1,
+  'textarea': 8,
+  'tfoot': 1,
+  'th': 1,
+  'thead': 1,
+  'time': 0,
+  'title': 280,
+  'tr': 1,
+  'track': 2,
+  'tt': 0,
+  'u': 0,
+  'ul': 0,
+  'var': 0,
+  'video': 0,
+  'wbr': 2
+};
+html4[ 'ELEMENTS' ] = html4.ELEMENTS;
+html4.ELEMENT_DOM_INTERFACES = {
+  'a': 'HTMLAnchorElement',
+  'abbr': 'HTMLElement',
+  'acronym': 'HTMLElement',
+  'address': 'HTMLElement',
+  'applet': 'HTMLAppletElement',
+  'area': 'HTMLAreaElement',
+  'article': 'HTMLElement',
+  'aside': 'HTMLElement',
+  'audio': 'HTMLAudioElement',
+  'b': 'HTMLElement',
+  'base': 'HTMLBaseElement',
+  'basefont': 'HTMLBaseFontElement',
+  'bdi': 'HTMLElement',
+  'bdo': 'HTMLElement',
+  'big': 'HTMLElement',
+  'blockquote': 'HTMLQuoteElement',
+  'body': 'HTMLBodyElement',
+  'br': 'HTMLBRElement',
+  'button': 'HTMLButtonElement',
+  'canvas': 'HTMLCanvasElement',
+  'caption': 'HTMLTableCaptionElement',
+  'center': 'HTMLElement',
+  'cite': 'HTMLElement',
+  'code': 'HTMLElement',
+  'col': 'HTMLTableColElement',
+  'colgroup': 'HTMLTableColElement',
+  'command': 'HTMLCommandElement',
+  'data': 'HTMLElement',
+  'datalist': 'HTMLDataListElement',
+  'dd': 'HTMLElement',
+  'del': 'HTMLModElement',
+  'details': 'HTMLDetailsElement',
+  'dfn': 'HTMLElement',
+  'dialog': 'HTMLDialogElement',
+  'dir': 'HTMLDirectoryElement',
+  'div': 'HTMLDivElement',
+  'dl': 'HTMLDListElement',
+  'dt': 'HTMLElement',
+  'em': 'HTMLElement',
+  'fieldset': 'HTMLFieldSetElement',
+  'figcaption': 'HTMLElement',
+  'figure': 'HTMLElement',
+  'font': 'HTMLFontElement',
+  'footer': 'HTMLElement',
+  'form': 'HTMLFormElement',
+  'frame': 'HTMLFrameElement',
+  'frameset': 'HTMLFrameSetElement',
+  'h1': 'HTMLHeadingElement',
+  'h2': 'HTMLHeadingElement',
+  'h3': 'HTMLHeadingElement',
+  'h4': 'HTMLHeadingElement',
+  'h5': 'HTMLHeadingElement',
+  'h6': 'HTMLHeadingElement',
+  'head': 'HTMLHeadElement',
+  'header': 'HTMLElement',
+  'hgroup': 'HTMLElement',
+  'hr': 'HTMLHRElement',
+  'html': 'HTMLHtmlElement',
+  'i': 'HTMLElement',
+  'iframe': 'HTMLIFrameElement',
+  'img': 'HTMLImageElement',
+  'input': 'HTMLInputElement',
+  'ins': 'HTMLModElement',
+  'isindex': 'HTMLUnknownElement',
+  'kbd': 'HTMLElement',
+  'keygen': 'HTMLKeygenElement',
+  'label': 'HTMLLabelElement',
+  'legend': 'HTMLLegendElement',
+  'li': 'HTMLLIElement',
+  'link': 'HTMLLinkElement',
+  'map': 'HTMLMapElement',
+  'mark': 'HTMLElement',
+  'menu': 'HTMLMenuElement',
+  'meta': 'HTMLMetaElement',
+  'meter': 'HTMLMeterElement',
+  'nav': 'HTMLElement',
+  'nobr': 'HTMLElement',
+  'noembed': 'HTMLElement',
+  'noframes': 'HTMLElement',
+  'noscript': 'HTMLElement',
+  'object': 'HTMLObjectElement',
+  'ol': 'HTMLOListElement',
+  'optgroup': 'HTMLOptGroupElement',
+  'option': 'HTMLOptionElement',
+  'output': 'HTMLOutputElement',
+  'p': 'HTMLParagraphElement',
+  'param': 'HTMLParamElement',
+  'pre': 'HTMLPreElement',
+  'progress': 'HTMLProgressElement',
+  'q': 'HTMLQuoteElement',
+  's': 'HTMLElement',
+  'samp': 'HTMLElement',
+  'script': 'HTMLScriptElement',
+  'section': 'HTMLElement',
+  'select': 'HTMLSelectElement',
+  'small': 'HTMLElement',
+  'source': 'HTMLSourceElement',
+  'span': 'HTMLSpanElement',
+  'strike': 'HTMLElement',
+  'strong': 'HTMLElement',
+  'style': 'HTMLStyleElement',
+  'sub': 'HTMLElement',
+  'summary': 'HTMLElement',
+  'sup': 'HTMLElement',
+  'table': 'HTMLTableElement',
+  'tbody': 'HTMLTableSectionElement',
+  'td': 'HTMLTableDataCellElement',
+  'textarea': 'HTMLTextAreaElement',
+  'tfoot': 'HTMLTableSectionElement',
+  'th': 'HTMLTableHeaderCellElement',
+  'thead': 'HTMLTableSectionElement',
+  'time': 'HTMLTimeElement',
+  'title': 'HTMLTitleElement',
+  'tr': 'HTMLTableRowElement',
+  'track': 'HTMLTrackElement',
+  'tt': 'HTMLElement',
+  'u': 'HTMLElement',
+  'ul': 'HTMLUListElement',
+  'var': 'HTMLElement',
+  'video': 'HTMLVideoElement',
+  'wbr': 'HTMLElement'
+};
+html4[ 'ELEMENT_DOM_INTERFACES' ] = html4.ELEMENT_DOM_INTERFACES;
+html4.ueffects = {
+  'NOT_LOADED': 0,
+  'SAME_DOCUMENT': 1,
+  'NEW_DOCUMENT': 2
+};
+html4[ 'ueffects' ] = html4.ueffects;
+html4.URIEFFECTS = {
+  'a::href': 2,
+  'area::href': 2,
+  'audio::src': 1,
+  'blockquote::cite': 0,
+  'command::icon': 1,
+  'del::cite': 0,
+  'form::action': 2,
+  'img::src': 1,
+  'input::src': 1,
+  'ins::cite': 0,
+  'q::cite': 0,
+  'video::poster': 1,
+  'video::src': 1
+};
+html4[ 'URIEFFECTS' ] = html4.URIEFFECTS;
+html4.ltypes = {
+  'UNSANDBOXED': 2,
+  'SANDBOXED': 1,
+  'DATA': 0
+};
+html4[ 'ltypes' ] = html4.ltypes;
+html4.LOADERTYPES = {
+  'a::href': 2,
+  'area::href': 2,
+  'audio::src': 2,
+  'blockquote::cite': 2,
+  'command::icon': 1,
+  'del::cite': 2,
+  'form::action': 2,
+  'img::src': 1,
+  'input::src': 1,
+  'ins::cite': 2,
+  'q::cite': 2,
+  'video::poster': 1,
+  'video::src': 2
+};
+html4[ 'LOADERTYPES' ] = html4.LOADERTYPES;
+// export for Closure Compiler
+if (typeof window !== 'undefined') {
+  window['html4'] = html4;
+}
+;
+// Copyright (C) 2006 Google Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/**
+ * @fileoverview
+ * An HTML sanitizer that can satisfy a variety of security policies.
+ *
+ * <p>
+ * The HTML sanitizer is built around a SAX parser and HTML element and
+ * attributes schemas.
+ *
+ * If the cssparser is loaded, inline styles are sanitized using the
+ * css property and value schemas.  Else they are remove during
+ * sanitization.
+ *
+ * If it exists, uses parseCssDeclarations, sanitizeCssProperty,  cssSchema
+ *
+ * @author mikesamuel@gmail.com
+ * @author jasvir@gmail.com
+ * \@requires html4, URI
+ * \@overrides window
+ * \@provides html, html_sanitize
+ */
+
+// The Turkish i seems to be a non-issue, but abort in case it is.
+if ('I'.toLowerCase() !== 'i') { throw 'I/i problem'; }
+
+/**
+ * \@namespace
+ */
+var html = (function(html4) {
+
+  // For closure compiler
+  var parseCssDeclarations, sanitizeCssProperty, cssSchema;
+  if ('undefined' !== typeof window) {
+    parseCssDeclarations = window['parseCssDeclarations'];
+    sanitizeCssProperty = window['sanitizeCssProperty'];
+    cssSchema = window['cssSchema'];
+  }
+
+  // The keys of this object must be 'quoted' or JSCompiler will mangle them!
+  // This is a partial list -- lookupEntity() uses the host browser's parser
+  // (when available) to implement full entity lookup.
+  // Note that entities are in general case-sensitive; the uppercase ones are
+  // explicitly defined by HTML5 (presumably as compatibility).
+  var ENTITIES = {
+    'lt': '<',
+    'LT': '<',
+    'gt': '>',
+    'GT': '>',
+    'amp': '&',
+    'AMP': '&',
+    'quot': '"',
+    'apos': '\'',
+    'nbsp': '\240'
+  };
+
+  // Patterns for types of entity/character reference names.
+  var decimalEscapeRe = /^#(\d+)$/;
+  var hexEscapeRe = /^#x([0-9A-Fa-f]+)$/;
+  // contains every entity per http://www.w3.org/TR/2011/WD-html5-20110113/named-character-references.html
+  var safeEntityNameRe = /^[A-Za-z][A-za-z0-9]+$/;
+  // Used as a hook to invoke the browser's entity parsing. <textarea> is used
+  // because its content is parsed for entities but not tags.
+  // TODO(kpreid): This retrieval is a kludge and leads to silent loss of
+  // functionality if the document isn't available.
+  var entityLookupElement =
+      ('undefined' !== typeof window && window['document'])
+          ? window['document'].createElement('textarea') : null;
+  /**
+   * Decodes an HTML entity.
+   *
+   * {\@updoc
+   * $ lookupEntity('lt')
+   * # '<'
+   * $ lookupEntity('GT')
+   * # '>'
+   * $ lookupEntity('amp')
+   * # '&'
+   * $ lookupEntity('nbsp')
+   * # '\xA0'
+   * $ lookupEntity('apos')
+   * # "'"
+   * $ lookupEntity('quot')
+   * # '"'
+   * $ lookupEntity('#xa')
+   * # '\n'
+   * $ lookupEntity('#10')
+   * # '\n'
+   * $ lookupEntity('#x0a')
+   * # '\n'
+   * $ lookupEntity('#010')
+   * # '\n'
+   * $ lookupEntity('#x00A')
+   * # '\n'
+   * $ lookupEntity('Pi')      // Known failure
+   * # '\u03A0'
+   * $ lookupEntity('pi')      // Known failure
+   * # '\u03C0'
+   * }
+   *
+   * @param {string} name the content between the '&' and the ';'.
+   * @return {string} a single unicode code-point as a string.
+   */
+  function lookupEntity(name) {
+    // TODO: entity lookup as specified by HTML5 actually depends on the
+    // presence of the ";".
+    if (ENTITIES.hasOwnProperty(name)) { return ENTITIES[name]; }
+    var m = name.match(decimalEscapeRe);
+    if (m) {
+      return String.fromCharCode(parseInt(m[1], 10));
+    } else if (!!(m = name.match(hexEscapeRe))) {
+      return String.fromCharCode(parseInt(m[1], 16));
+    } else if (entityLookupElement && safeEntityNameRe.test(name)) {
+      entityLookupElement.innerHTML = '&' + name + ';';
+      var text = entityLookupElement.textContent;
+      ENTITIES[name] = text;
+      return text;
+    } else {
+      return '&' + name + ';';
+    }
+  }
+
+  function decodeOneEntity(_, name) {
+    return lookupEntity(name);
+  }
+
+  var nulRe = /\0/g;
+  function stripNULs(s) {
+    return s.replace(nulRe, '');
+  }
+
+  var ENTITY_RE_1 = /&(#[0-9]+|#[xX][0-9A-Fa-f]+|\w+);/g;
+  var ENTITY_RE_2 = /^(#[0-9]+|#[xX][0-9A-Fa-f]+|\w+);/;
+  /**
+   * The plain text of a chunk of HTML CDATA which possibly containing.
+   *
+   * {\@updoc
+   * $ unescapeEntities('')
+   * # ''
+   * $ unescapeEntities('hello World!')
+   * # 'hello World!'
+   * $ unescapeEntities('1 &lt; 2 &amp;&AMP; 4 &gt; 3&#10;')
+   * # '1 < 2 && 4 > 3\n'
+   * $ unescapeEntities('&lt;&lt <- unfinished entity&gt;')
+   * # '<&lt <- unfinished entity>'
+   * $ unescapeEntities('/foo?bar=baz&copy=true')  // & often unescaped in URLS
+   * # '/foo?bar=baz&copy=true'
+   * $ unescapeEntities('pi=&pi;&#x3c0;, Pi=&Pi;\u03A0') // FIXME: known failure
+   * # 'pi=\u03C0\u03c0, Pi=\u03A0\u03A0'
+   * }
+   *
+   * @param {string} s a chunk of HTML CDATA.  It must not start or end inside
+   *     an HTML entity.
+   */
+  function unescapeEntities(s) {
+    return s.replace(ENTITY_RE_1, decodeOneEntity);
+  }
+
+  var ampRe = /&/g;
+  var looseAmpRe = /&([^a-z#]|#(?:[^0-9x]|x(?:[^0-9a-f]|$)|$)|$)/gi;
+  var ltRe = /[<]/g;
+  var gtRe = />/g;
+  var quotRe = /\"/g;
+
+  /**
+   * Escapes HTML special characters in attribute values.
+   *
+   * {\@updoc
+   * $ escapeAttrib('')
+   * # ''
+   * $ escapeAttrib('"<<&==&>>"')  // Do not just escape the first occurrence.
+   * # '&#34;&lt;&lt;&amp;&#61;&#61;&amp;&gt;&gt;&#34;'
+   * $ escapeAttrib('Hello <World>!')
+   * # 'Hello &lt;World&gt;!'
+   * }
+   */
+  function escapeAttrib(s) {
+    return ('' + s).replace(ampRe, '&amp;').replace(ltRe, '&lt;')
+        .replace(gtRe, '&gt;').replace(quotRe, '&#34;');
+  }
+
+  /**
+   * Escape entities in RCDATA that can be escaped without changing the meaning.
+   * {\@updoc
+   * $ normalizeRCData('1 < 2 &&amp; 3 > 4 &amp;& 5 &lt; 7&8')
+   * # '1 &lt; 2 &amp;&amp; 3 &gt; 4 &amp;&amp; 5 &lt; 7&amp;8'
+   * }
+   */
+  function normalizeRCData(rcdata) {
+    return rcdata
+        .replace(looseAmpRe, '&amp;$1')
+        .replace(ltRe, '&lt;')
+        .replace(gtRe, '&gt;');
+  }
+
+  // TODO(felix8a): validate sanitizer regexs against the HTML5 grammar at
+  // http://www.whatwg.org/specs/web-apps/current-work/multipage/syntax.html
+  // http://www.whatwg.org/specs/web-apps/current-work/multipage/parsing.html
+  // http://www.whatwg.org/specs/web-apps/current-work/multipage/tokenization.html
+  // http://www.whatwg.org/specs/web-apps/current-work/multipage/tree-construction.html
+
+  // We initially split input so that potentially meaningful characters
+  // like '<' and '>' are separate tokens, using a fast dumb process that
+  // ignores quoting.  Then we walk that token stream, and when we see a
+  // '<' that's the start of a tag, we use ATTR_RE to extract tag
+  // attributes from the next token.  That token will never have a '>'
+  // character.  However, it might have an unbalanced quote character, and
+  // when we see that, we combine additional tokens to balance the quote.
+
+  var ATTR_RE = new RegExp(
+    '^\\s*' +
+    '([-.:\\w]+)' +             // 1 = Attribute name
+    '(?:' + (
+      '\\s*(=)\\s*' +           // 2 = Is there a value?
+      '(' + (                   // 3 = Attribute value
+        // TODO(felix8a): maybe use backref to match quotes
+        '(\")[^\"]*(\"|$)' +    // 4, 5 = Double-quoted string
+        '|' +
+        '(\')[^\']*(\'|$)' +    // 6, 7 = Single-quoted string
+        '|' +
+        // Positive lookahead to prevent interpretation of
+        // <foo a= b=c> as <foo a='b=c'>
+        // TODO(felix8a): might be able to drop this case
+        '(?=[a-z][-\\w]*\\s*=)' +
+        '|' +
+        // Unquoted value that isn't an attribute name
+        // (since we didn't match the positive lookahead above)
+        '[^\"\'\\s]*' ) +
+      ')' ) +
+    ')?',
+    'i');
+
+  // false on IE<=8, true on most other browsers
+  var splitWillCapture = ('a,b'.split(/(,)/).length === 3);
+
+  // bitmask for tags with special parsing, like <script> and <textarea>
+  var EFLAGS_TEXT = html4.eflags['CDATA'] | html4.eflags['RCDATA'];
+
+  /**
+   * Given a SAX-like event handler, produce a function that feeds those
+   * events and a parameter to the event handler.
+   *
+   * The event handler has the form:{@code
+   * {
+   *   // Name is an upper-case HTML tag name.  Attribs is an array of
+   *   // alternating upper-case attribute names, and attribute values.  The
+   *   // attribs array is reused by the parser.  Param is the value passed to
+   *   // the saxParser.
+   *   startTag: function (name, attribs, param) { ... },
+   *   endTag:   function (name, param) { ... },
+   *   pcdata:   function (text, param) { ... },
+   *   rcdata:   function (text, param) { ... },
+   *   cdata:    function (text, param) { ... },
+   *   startDoc: function (param) { ... },
+   *   endDoc:   function (param) { ... }
+   * }}
+   *
+   * @param {Object} handler a record containing event handlers.
+   * @return {function(string, Object)} A function that takes a chunk of HTML
+   *     and a parameter.  The parameter is passed on to the handler methods.
+   */
+  function makeSaxParser(handler) {
+    // Accept quoted or unquoted keys (Closure compat)
+    var hcopy = {
+      cdata: handler.cdata || handler['cdata'],
+      comment: handler.comment || handler['comment'],
+      endDoc: handler.endDoc || handler['endDoc'],
+      endTag: handler.endTag || handler['endTag'],
+      pcdata: handler.pcdata || handler['pcdata'],
+      rcdata: handler.rcdata || handler['rcdata'],
+      startDoc: handler.startDoc || handler['startDoc'],
+      startTag: handler.startTag || handler['startTag']
+    };
+    return function(htmlText, param) {
+      return parse(htmlText, hcopy, param);
+    };
+  }
+
+  // Parsing strategy is to split input into parts that might be lexically
+  // meaningful (every ">" becomes a separate part), and then recombine
+  // parts if we discover they're in a different context.
+
+  // TODO(felix8a): Significant performance regressions from -legacy,
+  // tested on
+  //    Chrome 18.0
+  //    Firefox 11.0
+  //    IE 6, 7, 8, 9
+  //    Opera 11.61
+  //    Safari 5.1.3
+  // Many of these are unusual patterns that are linearly slower and still
+  // pretty fast (eg 1ms to 5ms), so not necessarily worth fixing.
+
+  // TODO(felix8a): "<script> && && && ... <\/script>" is slower on all
+  // browsers.  The hotspot is htmlSplit.
+
+  // TODO(felix8a): "<p title='>>>>...'><\/p>" is slower on all browsers.
+  // This is partly htmlSplit, but the hotspot is parseTagAndAttrs.
+
+  // TODO(felix8a): "<a><\/a><a><\/a>..." is slower on IE9.
+  // "<a>1<\/a><a>1<\/a>..." is faster, "<a><\/a>2<a><\/a>2..." is faster.
+
+  // TODO(felix8a): "<p<p<p..." is slower on IE[6-8]
+
+  var continuationMarker = {};
+  function parse(htmlText, handler, param) {
+    var m, p, tagName;
+    var parts = htmlSplit(htmlText);
+    var state = {
+      noMoreGT: false,
+      noMoreEndComments: false
+    };
+    parseCPS(handler, parts, 0, state, param);
+  }
+
+  function continuationMaker(h, parts, initial, state, param) {
+    return function () {
+      parseCPS(h, parts, initial, state, param);
+    };
+  }
+
+  function parseCPS(h, parts, initial, state, param) {
+    try {
+      if (h.startDoc && initial == 0) { h.startDoc(param); }
+      var m, p, tagName;
+      for (var pos = initial, end = parts.length; pos < end;) {
+        var current = parts[pos++];
+        var next = parts[pos];
+        switch (current) {
+        case '&':
+          if (ENTITY_RE_2.test(next)) {
+            if (h.pcdata) {
+              h.pcdata('&' + next, param, continuationMarker,
+                continuationMaker(h, parts, pos, state, param));
+            }
+            pos++;
+          } else {
+            if (h.pcdata) { h.pcdata("&amp;", param, continuationMarker,
+                continuationMaker(h, parts, pos, state, param));
+            }
+          }
+          break;
+        case '<\/':
+          if ((m = /^([-\w:]+)[^\'\"]*/.exec(next))) {
+            if (m[0].length === next.length && parts[pos + 1] === '>') {
+              // fast case, no attribute parsing needed
+              pos += 2;
+              tagName = m[1].toLowerCase();
+              if (h.endTag) {
+                h.endTag(tagName, param, continuationMarker,
+                  continuationMaker(h, parts, pos, state, param));
+              }
+            } else {
+              // slow case, need to parse attributes
+              // TODO(felix8a): do we really care about misparsing this?
+              pos = parseEndTag(
+                parts, pos, h, param, continuationMarker, state);
+            }
+          } else {
+            if (h.pcdata) {
+              h.pcdata('&lt;/', param, continuationMarker,
+                continuationMaker(h, parts, pos, state, param));
+            }
+          }
+          break;
+        case '<':
+          if (m = /^([-\w:]+)\s*\/?/.exec(next)) {
+            if (m[0].length === next.length && parts[pos + 1] === '>') {
+              // fast case, no attribute parsing needed
+              pos += 2;
+              tagName = m[1].toLowerCase();
+              if (h.startTag) {
+                h.startTag(tagName, [], param, continuationMarker,
+                  continuationMaker(h, parts, pos, state, param));
+              }
+              // tags like <script> and <textarea> have special parsing
+              var eflags = html4.ELEMENTS[tagName];
+              if (eflags & EFLAGS_TEXT) {
+                var tag = { name: tagName, next: pos, eflags: eflags };
+                pos = parseText(
+                  parts, tag, h, param, continuationMarker, state);
+              }
+            } else {
+              // slow case, need to parse attributes
+              pos = parseStartTag(
+                parts, pos, h, param, continuationMarker, state);
+            }
+          } else {
+            if (h.pcdata) {
+              h.pcdata('&lt;', param, continuationMarker,
+                continuationMaker(h, parts, pos, state, param));
+            }
+          }
+          break;
+        case '<\!--':
+          // The pathological case is n copies of '<\!--' without '-->', and
+          // repeated failure to find '-->' is quadratic.  We avoid that by
+          // remembering when search for '-->' fails.
+          if (!state.noMoreEndComments) {
+            // A comment <\!--x--> is split into three tokens:
+            //   '<\!--', 'x--', '>'
+            // We want to find the next '>' token that has a preceding '--'.
+            // pos is at the 'x--'.
+            for (p = pos + 1; p < end; p++) {
+              if (parts[p] === '>' && /--$/.test(parts[p - 1])) { break; }
+            }
+            if (p < end) {
+              if (h.comment) {
+                var comment = parts.slice(pos, p).join('');
+                h.comment(
+                  comment.substr(0, comment.length - 2), param,
+                  continuationMarker,
+                  continuationMaker(h, parts, p + 1, state, param));
+              }
+              pos = p + 1;
+            } else {
+              state.noMoreEndComments = true;
+            }
+          }
+          if (state.noMoreEndComments) {
+            if (h.pcdata) {
+              h.pcdata('&lt;!--', param, continuationMarker,
+                continuationMaker(h, parts, pos, state, param));
+            }
+          }
+          break;
+        case '<\!':
+          if (!/^\w/.test(next)) {
+            if (h.pcdata) {
+              h.pcdata('&lt;!', param, continuationMarker,
+                continuationMaker(h, parts, pos, state, param));
+            }
+          } else {
+            // similar to noMoreEndComment logic
+            if (!state.noMoreGT) {
+              for (p = pos + 1; p < end; p++) {
+                if (parts[p] === '>') { break; }
+              }
+              if (p < end) {
+                pos = p + 1;
+              } else {
+                state.noMoreGT = true;
+              }
+            }
+            if (state.noMoreGT) {
+              if (h.pcdata) {
+                h.pcdata('&lt;!', param, continuationMarker,
+                  continuationMaker(h, parts, pos, state, param));
+              }
+            }
+          }
+          break;
+        case '<?':
+          // similar to noMoreEndComment logic
+          if (!state.noMoreGT) {
+            for (p = pos + 1; p < end; p++) {
+              if (parts[p] === '>') { break; }
+            }
+            if (p < end) {
+              pos = p + 1;
+            } else {
+              state.noMoreGT = true;
+            }
+          }
+          if (state.noMoreGT) {
+            if (h.pcdata) {
+              h.pcdata('&lt;?', param, continuationMarker,
+                continuationMaker(h, parts, pos, state, param));
+            }
+          }
+          break;
+        case '>':
+          if (h.pcdata) {
+            h.pcdata("&gt;", param, continuationMarker,
+              continuationMaker(h, parts, pos, state, param));
+          }
+          break;
+        case '':
+          break;
+        default:
+          if (h.pcdata) {
+            h.pcdata(current, param, continuationMarker,
+              continuationMaker(h, parts, pos, state, param));
+          }
+          break;
+        }
+      }
+      if (h.endDoc) { h.endDoc(param); }
+    } catch (e) {
+      if (e !== continuationMarker) { throw e; }
+    }
+  }
+
+  // Split str into parts for the html parser.
+  function htmlSplit(str) {
+    // can't hoist this out of the function because of the re.exec loop.
+    var re = /(<\/|<\!--|<[!?]|[&<>])/g;
+    str += '';
+    if (splitWillCapture) {
+      return str.split(re);
+    } else {
+      var parts = [];
+      var lastPos = 0;
+      var m;
+      while ((m = re.exec(str)) !== null) {
+        parts.push(str.substring(lastPos, m.index));
+        parts.push(m[0]);
+        lastPos = m.index + m[0].length;
+      }
+      parts.push(str.substring(lastPos));
+      return parts;
+    }
+  }
+
+  function parseEndTag(parts, pos, h, param, continuationMarker, state) {
+    var tag = parseTagAndAttrs(parts, pos);
+    // drop unclosed tags
+    if (!tag) { return parts.length; }
+    if (h.endTag) {
+      h.endTag(tag.name, param, continuationMarker,
+        continuationMaker(h, parts, pos, state, param));
+    }
+    return tag.next;
+  }
+
+  function parseStartTag(parts, pos, h, param, continuationMarker, state) {
+    var tag = parseTagAndAttrs(parts, pos);
+    // drop unclosed tags
+    if (!tag) { return parts.length; }
+    if (h.startTag) {
+      h.startTag(tag.name, tag.attrs, param, continuationMarker,
+        continuationMaker(h, parts, tag.next, state, param));
+    }
+    // tags like <script> and <textarea> have special parsing
+    if (tag.eflags & EFLAGS_TEXT) {
+      return parseText(parts, tag, h, param, continuationMarker, state);
+    } else {
+      return tag.next;
+    }
+  }
+
+  var endTagRe = {};
+
+  // Tags like <script> and <textarea> are flagged as CDATA or RCDATA,
+  // which means everything is text until we see the correct closing tag.
+  function parseText(parts, tag, h, param, continuationMarker, state) {
+    var end = parts.length;
+    if (!endTagRe.hasOwnProperty(tag.name)) {
+      endTagRe[tag.name] = new RegExp('^' + tag.name + '(?:[\\s\\/]|$)', 'i');
+    }
+    var re = endTagRe[tag.name];
+    var first = tag.next;
+    var p = tag.next + 1;
+    for (; p < end; p++) {
+      if (parts[p - 1] === '<\/' && re.test(parts[p])) { break; }
+    }
+    if (p < end) { p -= 1; }
+    var buf = parts.slice(first, p).join('');
+    if (tag.eflags & html4.eflags['CDATA']) {
+      if (h.cdata) {
+        h.cdata(buf, param, continuationMarker,
+          continuationMaker(h, parts, p, state, param));
+      }
+    } else if (tag.eflags & html4.eflags['RCDATA']) {
+      if (h.rcdata) {
+        h.rcdata(normalizeRCData(buf), param, continuationMarker,
+          continuationMaker(h, parts, p, state, param));
+      }
+    } else {
+      throw new Error('bug');
+    }
+    return p;
+  }
+
+  // at this point, parts[pos-1] is either "<" or "<\/".
+  function parseTagAndAttrs(parts, pos) {
+    var m = /^([-\w:]+)/.exec(parts[pos]);
+    var tag = {};
+    tag.name = m[1].toLowerCase();
+    tag.eflags = html4.ELEMENTS[tag.name];
+    var buf = parts[pos].substr(m[0].length);
+    // Find the next '>'.  We optimistically assume this '>' is not in a
+    // quoted context, and further down we fix things up if it turns out to
+    // be quoted.
+    var p = pos + 1;
+    var end = parts.length;
+    for (; p < end; p++) {
+      if (parts[p] === '>') { break; }
+      buf += parts[p];
+    }
+    if (end <= p) { return void 0; }
+    var attrs = [];
+    while (buf !== '') {
+      m = ATTR_RE.exec(buf);
+      if (!m) {
+        // No attribute found: skip garbage
+        buf = buf.replace(/^[\s\S][^a-z\s]*/, '');
+
+      } else if ((m[4] && !m[5]) || (m[6] && !m[7])) {
+        // Unterminated quote: slurp to the next unquoted '>'
+        var quote = m[4] || m[6];
+        var sawQuote = false;
+        var abuf = [buf, parts[p++]];
+        for (; p < end; p++) {
+          if (sawQuote) {
+            if (parts[p] === '>') { break; }
+          } else if (0 <= parts[p].indexOf(quote)) {
+            sawQuote = true;
+          }
+          abuf.push(parts[p]);
+        }
+        // Slurp failed: lose the garbage
+        if (end <= p) { break; }
+        // Otherwise retry attribute parsing
+        buf = abuf.join('');
+        continue;
+
+      } else {
+        // We have an attribute
+        var aName = m[1].toLowerCase();
+        var aValue = m[2] ? decodeValue(m[3]) : '';
+        attrs.push(aName, aValue);
+        buf = buf.substr(m[0].length);
+      }
+    }
+    tag.attrs = attrs;
+    tag.next = p + 1;
+    return tag;
+  }
+
+  function decodeValue(v) {
+    var q = v.charCodeAt(0);
+    if (q === 0x22 || q === 0x27) { // " or '
+      v = v.substr(1, v.length - 2);
+    }
+    return unescapeEntities(stripNULs(v));
+  }
+
+  /**
+   * Returns a function that strips unsafe tags and attributes from html.
+   * @param {function(string, Array.<string>): ?Array.<string>} tagPolicy
+   *     A function that takes (tagName, attribs[]), where tagName is a key in
+   *     html4.ELEMENTS and attribs is an array of alternating attribute names
+   *     and values.  It should return a record (as follows), or null to delete
+   *     the element.  It's okay for tagPolicy to modify the attribs array,
+   *     but the same array is reused, so it should not be held between calls.
+   *     Record keys:
+   *        attribs: (required) Sanitized attributes array.
+   *        tagName: Replacement tag name.
+   * @return {function(string, Array)} A function that sanitizes a string of
+   *     HTML and appends result strings to the second argument, an array.
+   */
+  function makeHtmlSanitizer(tagPolicy) {
+    var stack;
+    var ignoring;
+    var emit = function (text, out) {
+      if (!ignoring) { out.push(text); }
+    };
+    return makeSaxParser({
+      'startDoc': function(_) {
+        stack = [];
+        ignoring = false;
+      },
+      'startTag': function(tagNameOrig, attribs, out) {
+        if (ignoring) { return; }
+        if (!html4.ELEMENTS.hasOwnProperty(tagNameOrig)) { return; }
+        var eflagsOrig = html4.ELEMENTS[tagNameOrig];
+        if (eflagsOrig & html4.eflags['FOLDABLE']) {
+          return;
+        }
+
+        var decision = tagPolicy(tagNameOrig, attribs);
+        if (!decision) {
+          ignoring = !(eflagsOrig & html4.eflags['EMPTY']);
+          return;
+        } else if (typeof decision !== 'object') {
+          throw new Error('tagPolicy did not return object (old API?)');
+        }
+        if ('attribs' in decision) {
+          attribs = decision['attribs'];
+        } else {
+          throw new Error('tagPolicy gave no attribs');
+        }
+        var eflagsRep;
+        var tagNameRep;
+        if ('tagName' in decision) {
+          tagNameRep = decision['tagName'];
+          eflagsRep = html4.ELEMENTS[tagNameRep];
+        } else {
+          tagNameRep = tagNameOrig;
+          eflagsRep = eflagsOrig;
+        }
+        // TODO(mikesamuel): relying on tagPolicy not to insert unsafe
+        // attribute names.
+
+        // If this is an optional-end-tag element and either this element or its
+        // previous like sibling was rewritten, then insert a close tag to
+        // preserve structure.
+        if (eflagsOrig & html4.eflags['OPTIONAL_ENDTAG']) {
+          var onStack = stack[stack.length - 1];
+          if (onStack && onStack.orig === tagNameOrig &&
+              (onStack.rep !== tagNameRep || tagNameOrig !== tagNameRep)) {
+                out.push('<\/', onStack.rep, '>');
+          }
+        }
+
+        if (!(eflagsOrig & html4.eflags['EMPTY'])) {
+          stack.push({orig: tagNameOrig, rep: tagNameRep});
+        }
+
+        out.push('<', tagNameRep);
+        for (var i = 0, n = attribs.length; i < n; i += 2) {
+          var attribName = attribs[i],
+              value = attribs[i + 1];
+          if (value !== null && value !== void 0) {
+            out.push(' ', attribName, '="', escapeAttrib(value), '"');
+          }
+        }
+        out.push('>');
+
+        if ((eflagsOrig & html4.eflags['EMPTY'])
+            && !(eflagsRep & html4.eflags['EMPTY'])) {
+          // replacement is non-empty, synthesize end tag
+          out.push('<\/', tagNameRep, '>');
+        }
+      },
+      'endTag': function(tagName, out) {
+        if (ignoring) {
+          ignoring = false;
+          return;
+        }
+        if (!html4.ELEMENTS.hasOwnProperty(tagName)) { return; }
+        var eflags = html4.ELEMENTS[tagName];
+        if (!(eflags & (html4.eflags['EMPTY'] | html4.eflags['FOLDABLE']))) {
+          var index;
+          if (eflags & html4.eflags['OPTIONAL_ENDTAG']) {
+            for (index = stack.length; --index >= 0;) {
+              var stackElOrigTag = stack[index].orig;
+              if (stackElOrigTag === tagName) { break; }
+              if (!(html4.ELEMENTS[stackElOrigTag] &
+                    html4.eflags['OPTIONAL_ENDTAG'])) {
+                // Don't pop non optional end tags looking for a match.
+                return;
+              }
+            }
+          } else {
+            for (index = stack.length; --index >= 0;) {
+              if (stack[index].orig === tagName) { break; }
+            }
+          }
+          if (index < 0) { return; }  // Not opened.
+          for (var i = stack.length; --i > index;) {
+            var stackElRepTag = stack[i].rep;
+            if (!(html4.ELEMENTS[stackElRepTag] &
+                  html4.eflags['OPTIONAL_ENDTAG'])) {
+              out.push('<\/', stackElRepTag, '>');
+            }
+          }
+          if (index < stack.length) {
+            tagName = stack[index].rep;
+          }
+          stack.length = index;
+          out.push('<\/', tagName, '>');
+        }
+      },
+      'pcdata': emit,
+      'rcdata': emit,
+      'cdata': emit,
+      'endDoc': function(out) {
+        for (; stack.length; stack.length--) {
+          out.push('<\/', stack[stack.length - 1].rep, '>');
+        }
+      }
+    });
+  }
+
+  var ALLOWED_URI_SCHEMES = /^(?:https?|mailto)$/i;
+
+  function safeUri(uri, effect, ltype, hints, naiveUriRewriter) {
+    if (!naiveUriRewriter) { return null; }
+    try {
+      var parsed = URI.parse('' + uri);
+      if (parsed) {
+        if (!parsed.hasScheme() ||
+            ALLOWED_URI_SCHEMES.test(parsed.getScheme())) {
+          var safe = naiveUriRewriter(parsed, effect, ltype, hints);
+          return safe ? safe.toString() : null;
+        }
+      }
+    } catch (e) {
+      return null;
+    }
+    return null;
+  }
+
+  function log(logger, tagName, attribName, oldValue, newValue) {
+    if (!attribName) {
+      logger(tagName + " removed", {
+        change: "removed",
+        tagName: tagName
+      });
+    }
+    if (oldValue !== newValue) {
+      var changed = "changed";
+      if (oldValue && !newValue) {
+        changed = "removed";
+      } else if (!oldValue && newValue)  {
+        changed = "added";
+      }
+      logger(tagName + "." + attribName + " " + changed, {
+        change: changed,
+        tagName: tagName,
+        attribName: attribName,
+        oldValue: oldValue,
+        newValue: newValue
+      });
+    }
+  }
+
+  function lookupAttribute(map, tagName, attribName) {
+    var attribKey;
+    attribKey = tagName + '::' + attribName;
+    if (map.hasOwnProperty(attribKey)) {
+      return map[attribKey];
+    }
+    attribKey = '*::' + attribName;
+    if (map.hasOwnProperty(attribKey)) {
+      return map[attribKey];
+    }
+    return void 0;
+  }
+  function getAttributeType(tagName, attribName) {
+    return lookupAttribute(html4.ATTRIBS, tagName, attribName);
+  }
+  function getLoaderType(tagName, attribName) {
+    return lookupAttribute(html4.LOADERTYPES, tagName, attribName);
+  }
+  function getUriEffect(tagName, attribName) {
+    return lookupAttribute(html4.URIEFFECTS, tagName, attribName);
+  }
+
+  /**
+   * Sanitizes attributes on an HTML tag.
+   * @param {string} tagName An HTML tag name in lowercase.
+   * @param {Array.<?string>} attribs An array of alternating names and values.
+   * @param {?function(?string): ?string} opt_naiveUriRewriter A transform to
+   *     apply to URI attributes; it can return a new string value, or null to
+   *     delete the attribute.  If unspecified, URI attributes are deleted.
+   * @param {function(?string): ?string} opt_nmTokenPolicy A transform to apply
+   *     to attributes containing HTML names, element IDs, and space-separated
+   *     lists of classes; it can return a new string value, or null to delete
+   *     the attribute.  If unspecified, these attributes are kept unchanged.
+   * @return {Array.<?string>} The sanitized attributes as a list of alternating
+   *     names and values, where a null value means to omit the attribute.
+   */
+  function sanitizeAttribs(tagName, attribs,
+    opt_naiveUriRewriter, opt_nmTokenPolicy, opt_logger) {
+    // TODO(felix8a): it's obnoxious that domado duplicates much of this
+    // TODO(felix8a): maybe consistently enforce constraints like target=
+    for (var i = 0; i < attribs.length; i += 2) {
+      var attribName = attribs[i];
+      var value = attribs[i + 1];
+      var oldValue = value;
+      var atype = null, attribKey;
+      if ((attribKey = tagName + '::' + attribName,
+           html4.ATTRIBS.hasOwnProperty(attribKey)) ||
+          (attribKey = '*::' + attribName,
+           html4.ATTRIBS.hasOwnProperty(attribKey))) {
+        atype = html4.ATTRIBS[attribKey];
+      }
+      if (atype !== null) {
+        switch (atype) {
+          case html4.atype['NONE']: break;
+          case html4.atype['SCRIPT']:
+            value = null;
+            if (opt_logger) {
+              log(opt_logger, tagName, attribName, oldValue, value);
+            }
+            break;
+          case html4.atype['STYLE']:
+            if ('undefined' === typeof parseCssDeclarations) {
+              value = null;
+              if (opt_logger) {
+                log(opt_logger, tagName, attribName, oldValue, value);
+	      }
+              break;
+            }
+            var sanitizedDeclarations = [];
+            parseCssDeclarations(
+                value,
+                {
+                  'declaration': function (property, tokens) {
+                    var normProp = property.toLowerCase();
+                    sanitizeCssProperty(
+                        normProp, tokens,
+                        opt_naiveUriRewriter
+                        ? function (url) {
+                            return safeUri(
+                                url, html4.ueffects.SAME_DOCUMENT,
+                                html4.ltypes.SANDBOXED,
+                                {
+                                  "TYPE": "CSS",
+                                  "CSS_PROP": normProp
+                                }, opt_naiveUriRewriter);
+                          }
+                        : null);
+                    if (tokens.length) {
+                      sanitizedDeclarations.push(
+                          normProp + ': ' + tokens.join(' '));
+                    }
+                  }
+                });
+            value = sanitizedDeclarations.length > 0 ?
+              sanitizedDeclarations.join(' ; ') : null;
+            if (opt_logger) {
+              log(opt_logger, tagName, attribName, oldValue, value);
+            }
+            break;
+          case html4.atype['ID']:
+          case html4.atype['IDREF']:
+          case html4.atype['IDREFS']:
+          case html4.atype['GLOBAL_NAME']:
+          case html4.atype['LOCAL_NAME']:
+          case html4.atype['CLASSES']:
+            value = opt_nmTokenPolicy ? opt_nmTokenPolicy(value) : value;
+            if (opt_logger) {
+              log(opt_logger, tagName, attribName, oldValue, value);
+            }
+            break;
+          case html4.atype['URI']:
+            value = safeUri(value,
+              getUriEffect(tagName, attribName),
+              getLoaderType(tagName, attribName),
+              {
+                "TYPE": "MARKUP",
+                "XML_ATTR": attribName,
+                "XML_TAG": tagName
+              }, opt_naiveUriRewriter);
+              if (opt_logger) {
+              log(opt_logger, tagName, attribName, oldValue, value);
+            }
+            break;
+          case html4.atype['URI_FRAGMENT']:
+            if (value && '#' === value.charAt(0)) {
+              value = value.substring(1);  // remove the leading '#'
+              value = opt_nmTokenPolicy ? opt_nmTokenPolicy(value) : value;
+              if (value !== null && value !== void 0) {
+                value = '#' + value;  // restore the leading '#'
+              }
+            } else {
+              value = null;
+            }
+            if (opt_logger) {
+              log(opt_logger, tagName, attribName, oldValue, value);
+            }
+            break;
+          default:
+            value = null;
+            if (opt_logger) {
+              log(opt_logger, tagName, attribName, oldValue, value);
+            }
+            break;
+        }
+      } else {
+        // ***CartoDB.js Custom start: allow data-* attributes
+        // As proposed in https://groups.google.com/forum/#!topic/google-caja-discuss/ihuk9fMkJMw
+        if (/data-[\w-]+/.test(attribName)) {
+          value = opt_nmTokenPolicy ? opt_nmTokenPolicy(value) : value;
+        } else {
+          value = null;
+        }
+        if (opt_logger) {
+          log(opt_logger, tagName, attribName, oldValue, value);
+        }
+      }
+      attribs[i + 1] = value;
+    }
+    return attribs;
+  }
+
+  /**
+   * Creates a tag policy that omits all tags marked UNSAFE in html4-defs.js
+   * and applies the default attribute sanitizer with the supplied policy for
+   * URI attributes and NMTOKEN attributes.
+   * @param {?function(?string): ?string} opt_naiveUriRewriter A transform to
+   *     apply to URI attributes.  If not given, URI attributes are deleted.
+   * @param {function(?string): ?string} opt_nmTokenPolicy A transform to apply
+   *     to attributes containing HTML names, element IDs, and space-separated
+   *     lists of classes.  If not given, such attributes are left unchanged.
+   * @return {function(string, Array.<?string>)} A tagPolicy suitable for
+   *     passing to html.sanitize.
+   */
+  function makeTagPolicy(
+    opt_naiveUriRewriter, opt_nmTokenPolicy, opt_logger) {
+    return function(tagName, attribs) {
+      if (!(html4.ELEMENTS[tagName] & html4.eflags['UNSAFE'])) {
+        return {
+          'attribs': sanitizeAttribs(tagName, attribs,
+            opt_naiveUriRewriter, opt_nmTokenPolicy, opt_logger)
+        };
+      } else {
+        if (opt_logger) {
+          log(opt_logger, tagName, undefined, undefined, undefined);
+        }
+      }
+    };
+  }
+
+  /**
+   * Sanitizes HTML tags and attributes according to a given policy.
+   * @param {string} inputHtml The HTML to sanitize.
+   * @param {function(string, Array.<?string>)} tagPolicy A function that
+   *     decides which tags to accept and sanitizes their attributes (see
+   *     makeHtmlSanitizer above for details).
+   * @return {string} The sanitized HTML.
+   */
+  function sanitizeWithPolicy(inputHtml, tagPolicy) {
+    var outputArray = [];
+    makeHtmlSanitizer(tagPolicy)(inputHtml, outputArray);
+    return outputArray.join('');
+  }
+
+  /**
+   * Strips unsafe tags and attributes from HTML.
+   * @param {string} inputHtml The HTML to sanitize.
+   * @param {?function(?string): ?string} opt_naiveUriRewriter A transform to
+   *     apply to URI attributes.  If not given, URI attributes are deleted.
+   * @param {function(?string): ?string} opt_nmTokenPolicy A transform to apply
+   *     to attributes containing HTML names, element IDs, and space-separated
+   *     lists of classes.  If not given, such attributes are left unchanged.
+   */
+  function sanitize(inputHtml,
+    opt_naiveUriRewriter, opt_nmTokenPolicy, opt_logger) {
+    var tagPolicy = makeTagPolicy(
+      opt_naiveUriRewriter, opt_nmTokenPolicy, opt_logger);
+    return sanitizeWithPolicy(inputHtml, tagPolicy);
+  }
+
+  // Export both quoted and unquoted names for Closure linkage.
+  var html = {};
+  html.escapeAttrib = html['escapeAttrib'] = escapeAttrib;
+  html.makeHtmlSanitizer = html['makeHtmlSanitizer'] = makeHtmlSanitizer;
+  html.makeSaxParser = html['makeSaxParser'] = makeSaxParser;
+  html.makeTagPolicy = html['makeTagPolicy'] = makeTagPolicy;
+  html.normalizeRCData = html['normalizeRCData'] = normalizeRCData;
+  html.sanitize = html['sanitize'] = sanitize;
+  html.sanitizeAttribs = html['sanitizeAttribs'] = sanitizeAttribs;
+  html.sanitizeWithPolicy = html['sanitizeWithPolicy'] = sanitizeWithPolicy;
+  html.unescapeEntities = html['unescapeEntities'] = unescapeEntities;
+  return html;
+})(html4);
+
+var html_sanitize = html['sanitize'];
+
+// Exports for Closure compiler.  Note this file is also cajoled
+// for domado and run in an environment without 'window'
+if (typeof window !== 'undefined') {
+  window['html'] = html;
+  window['html_sanitize'] = html_sanitize;
+}
 
 
 
@@ -20698,7 +25652,7 @@ this.LZMA = LZMA;
 
     var cdb = root.cdb = {};
 
-    cdb.VERSION = '3.11.05-dev';
+    cdb.VERSION = "3.14.0";
     cdb.DEBUG = false;
 
     cdb.CARTOCSS_VERSIONS = {
@@ -20715,6 +25669,7 @@ this.LZMA = LZMA;
 
     root.cdb.config = {};
     root.cdb.core = {};
+    root.cdb.image = {};
     root.cdb.geo = {};
     root.cdb.geo.ui = {};
     root.cdb.geo.geocoder = {};
@@ -20733,6 +25688,7 @@ this.LZMA = LZMA;
         "../vendor/underscore-min.js",
         "../vendor/json2.js",
         "../vendor/backbone.js",
+        "../vendor/mustache.js",
 
         "../vendor/leaflet.js",
         "../vendor/wax.cartodb.js",
@@ -20743,7 +25699,9 @@ this.LZMA = LZMA;
         "../vendor/mwheelIntent.js",
         "../vendor/spin.js",
         "../vendor/lzma.js",
+        "../vendor/html-css-sanitizer-bundle.js",
 
+        'core/sanitize.js',
         'core/decorator.js',
         'core/config.js',
         'core/log.js',
@@ -20751,22 +25709,25 @@ this.LZMA = LZMA;
         'core/template.js',
         'core/model.js',
         'core/view.js',
+        'core/loader.js',
 
         'geo/geocoder.js',
         'geo/geometry.js',
         'geo/map.js',
         'geo/ui/text.js',
+        'geo/ui/annotation.js',
         'geo/ui/image.js',
         'geo/ui/share.js',
         'geo/ui/zoom.js',
         'geo/ui/zoom_info.js',
-        'geo/ui/mobile.js',
         'geo/ui/legend.js',
         'geo/ui/switcher.js',
         'geo/ui/infowindow.js',
         'geo/ui/header.js',
         'geo/ui/search.js',
         'geo/ui/layer_selector.js',
+        'geo/ui/slides_controller.js',
+        'geo/ui/mobile.js',
         'geo/ui/tiles_loader.js',
         'geo/ui/infobox.js',
         'geo/ui/tooltip.js',
@@ -20778,6 +25739,7 @@ this.LZMA = LZMA;
         'geo/leaflet/leaflet_base.js',
         'geo/leaflet/leaflet_plainlayer.js',
         'geo/leaflet/leaflet_tiledlayer.js',
+        'geo/leaflet/leaflet_gmaps_tiledlayer.js',
         'geo/leaflet/leaflet_wmslayer.js',
         'geo/leaflet/leaflet_cartodb_layergroup.js',
         'geo/leaflet/leaflet_cartodb_layer.js',
@@ -20798,6 +25760,7 @@ this.LZMA = LZMA;
         'ui/common/dropdown.js',
 
         'vis/vis.js',
+        'vis/image.js',
         'vis/overlays.js',
         'vis/layers.js',
 
@@ -20842,6 +25805,31 @@ this.LZMA = LZMA;
 
     };
 })();
+(function(exports, w) {
+  exports.sanitize = w.html;
+
+  /**
+   * Sanitize inputHtml of unsafe HTML tags & attributes
+   * @param {String} inputHtml
+   * @param {Function,false,null,undefined} optionalSanitizer By default undefined, for which the default sanitizer will be used.
+   *   Pass a function (that takes inputHtml) to sanitize yourself, or false/null to skip sanitize call.
+   */
+  exports.sanitize.html = function(inputHtml, optionalSanitizer) {
+    if (!inputHtml) return;
+
+    if (optionalSanitizer === undefined) {
+      return exports.sanitize.sanitize(inputHtml, function(url) {
+        // Return all URLs for <a href=""> (javascript: and data: URLs are removed prior to this fn is called)
+        return url;
+      });
+    } else if (typeof optionalSanitizer === 'function') {
+      return optionalSanitizer(inputHtml);
+    } else { // alt sanitization set to false/null/other, treat as if caller takes responsibility to sanitize output
+      return inputHtml;
+    }
+  };
+
+})(cdb.core, window);
 /**
 * Decorators to extend funcionality of cdb related objects
 */
@@ -20950,6 +25938,7 @@ if(!window.JSON) {
           this.modules = new Backbone.Collection();
           this.modules.bind('add', function(model) {
             this.trigger('moduleLoaded');
+            this.trigger('moduleLoaded:' + model.get('name'));
           }, this);
         },
 
@@ -20957,12 +25946,31 @@ if(!window.JSON) {
         REPORT_ERROR_URL: '/api/v0/error',
         ERROR_TRACK_ENABLED: false,
 
-        getSqlApiUrl: function() {
-          var url = this.get('sql_api_protocol') + '://' +
-            this.get('user_name') + '.' +
-            this.get('sql_api_domain') + ':' +
-            this.get('sql_api_port');
+        /**
+         * returns the base url to compose the final url
+         * http://user.cartodb.com/
+         */
+        getSqlApiBaseUrl: function() {
+          var url;
+          if (this.get('sql_api_template')) {
+            url = this.get("sql_api_template").replace('{user}', this.get('user_name'));
+          } else {
+            url = this.get('sql_api_protocol') + '://' +
+              this.get('user_name') + '.' +
+              this.get('sql_api_domain') + ':' +
+              this.get('sql_api_port');
+          }
           return url;
+        },
+
+        /**
+         * returns the full sql api url, including the api endpoint
+         * allos to specify the version
+         * http://user.cartodb.com/api/v1/sql
+         */
+        getSqlApiUrl: function(version) {
+          version = version || 'v2';
+          return this.getSqlApiBaseUrl() + "/api/" + version + "/sql";
         }
 
 
@@ -21052,7 +26060,7 @@ if(!window.JSON) {
         },
 
         debug: function() {
-            _console.log.apply(_console, arguments);
+          if (cdb.DEBUG) _console.log.apply(_console, arguments);
         }
     });
 
@@ -21293,7 +26301,15 @@ cdb.core.Template = Backbone.Model.extend({
 }, {
   compilers: {
     'underscore': _.template,
-    'mustache': typeof(Mustache) === 'undefined' ? null: Mustache.compile
+    'mustache': typeof(Mustache) === 'undefined' ?
+      null :
+      // Replacement for Mustache.compile, which was removed in version 0.8.0
+      function compile(template) {
+        Mustache.parse(template);
+        return function (view, partials) {
+          return Mustache.render(template, view, partials);
+        };
+      }
   },
   compile: function(tmpl, type) {
     var t = new cdb.core.Template({
@@ -21611,6 +26627,76 @@ cdb._loadJST = function() {
   });
 
 })();
+var Loader = cdb.vis.Loader = cdb.core.Loader = {
+
+  queue: [],
+  current: undefined,
+  _script: null,
+  head: null,
+
+  loadScript: function(src) {
+      var script = document.createElement('script');
+      script.type = 'text/javascript';
+      script.src = src;
+      script.async = true;
+      if (!Loader.head) {
+        Loader.head = document.getElementsByTagName('head')[0];
+      }
+      // defer the loading because IE9 loads in the same frame the script
+      // so Loader._script is null
+      setTimeout(function() {
+        Loader.head.appendChild(script);
+      }, 0);
+      return script;
+  },
+
+  get: function(url, callback) {
+    if (!Loader._script) {
+      Loader.current = callback;
+      Loader._script = Loader.loadScript(url + (~url.indexOf('?') ? '&' : '?') + 'callback=vizjson');
+    } else {
+      Loader.queue.push([url, callback]);
+    }
+  },
+
+  getPath: function(file) {
+    var scripts = document.getElementsByTagName('script'),
+        cartodbJsRe = /\/?cartodb[\-\._]?([\w\-\._]*)\.js\??/;
+    for (i = 0, len = scripts.length; i < len; i++) {
+      src = scripts[i].src;
+      matches = src.match(cartodbJsRe);
+
+      if (matches) {
+        var bits = src.split('/');
+        delete bits[bits.length - 1];
+        return bits.join('/') + file;
+      }
+    }
+    return null;
+  },
+
+  loadModule: function(modName) {
+    var file = "cartodb.mod." + modName + (cartodb.DEBUG ? ".uncompressed.js" : ".js");
+    var src = this.getPath(file);
+    if (!src) {
+      cartodb.log.error("can't find cartodb.js file");
+    }
+    Loader.loadScript(src);
+  }
+};
+
+window.vizjson = function(data) {
+  Loader.current && Loader.current(data);
+  // remove script
+  Loader.head.removeChild(Loader._script);
+  Loader._script = null;
+  // next element
+  var a = Loader.queue.shift();
+  if (a) {
+    Loader.get(a[0], a[1]);
+  }
+};
+
 
 
 /**
@@ -21805,25 +26891,19 @@ cdb.geo.MapLayer = cdb.core.Model.extend({
       if(myType === 'Tiled') {
         var myTemplate  = me.urlTemplate? me.urlTemplate : me.options.urlTemplate
           , itsTemplate = other.urlTemplate? other.urlTemplate : other.options.urlTemplate;
-
-        if(myTemplate === itsTemplate) {
-          return true; // tiled and same template
-        } else {
-          return false; // tiled and differente template
-        }
+        return myTemplate === itsTemplate;
       } else if(myType === 'WMS') {
-
         var myTemplate  = me.urlTemplate? me.urlTemplate : me.options.urlTemplate
           , itsTemplate = other.urlTemplate? other.urlTemplate : other.options.urlTemplate;
-
         var myLayer  = me.layers? me.layers : me.options.layers
           , itsLayer = other.layers? other.layers : other.options.layers;
-
-        if(myTemplate === itsTemplate && myLayer === itsLayer) {
-          return true; // wms and same template
-        } else {
-          return false; // wms and differente template
-        }
+        return myTemplate === itsTemplate && myLayer === itsLayer;
+      }
+      else if (myType === 'torque') {
+        return cdb.geo.TorqueLayer.prototype.isEqual.call(this, layer);
+      }
+      else if (myType === 'named_map') {
+        return cdb.geo.CartoDBNamedMapLayer.prototype.isEqual.call(this, layer);
       } else { // same type but not tiled
         var myBaseType = me.base_type? me.base_type : me.options.base_type;
         var itsBaseType = other.base_type? other.base_type : other.options.base_type;
@@ -21893,7 +26973,16 @@ cdb.geo.TorqueLayer = cdb.geo.MapLayer.extend({
   defaults: {
     type: 'torque',
     visible: true
+  },
+
+  isEqual: function(other) {
+    var properties = ['query', 'query_wrapper', 'cartocss'];
+    var self = this;
+    return this.get('type') === other.get('type') && _.every(properties, function(p) {
+      return other.get(p) === self.get(p);
+    });
   }
+
 });
 
 // CartoDB layer
@@ -21943,13 +27032,30 @@ cdb.geo.CartoDBLayer = cdb.geo.MapLayer.extend({
     } else {
       this.activate();
     }
-  }
+  },
+
+  /*isEqual: function() {
+    return false;
+  }*/
 });
 
 cdb.geo.CartoDBGroupLayer = cdb.geo.MapLayer.extend({
+
   defaults: {
     visible: true,
     type: 'layergroup'
+  },
+
+  initialize: function() {
+    this.sublayers = new cdb.geo.Layers();
+  },
+
+  isEqual: function() {
+    return false;
+  },
+
+  contains: function(layer) {
+    return layer.get('type') === 'cartodb';
   }
 });
 
@@ -21957,7 +27063,12 @@ cdb.geo.CartoDBNamedMapLayer = cdb.geo.MapLayer.extend({
   defaults: {
     visible: true,
     type: 'namedmap'
+  },
+
+  isEqual: function(other) {
+    return _.isEqual(this.get('options').named_map, other.get('options').named_map);
   }
+
 });
 
 cdb.geo.Layers = Backbone.Collection.extend({
@@ -22010,6 +27121,7 @@ cdb.geo.Map = cdb.core.Model.extend({
     minZoom: 0,
     maxZoom: 40,
     scrollwheel: true,
+    keyboard: true,
     provider: 'leaflet'
   },
 
@@ -22038,6 +27150,18 @@ cdb.geo.Map = cdb.core.Model.extend({
   setZoom: function(z) {
     this.set({
       zoom: z
+    });
+  },
+
+  enableKeyboard: function() {
+    this.set({
+      keyboard: true
+    });
+  },
+
+  disableKeyboard: function() {
+    this.set({
+      keyboard: false
     });
   },
 
@@ -22383,6 +27507,7 @@ cdb.geo.MapView = cdb.core.View.extend({
     this.map.bind('change:view_bounds_ne',  this._changeBounds, this);
     this.map.bind('change:zoom',            this._setZoom, this);
     this.map.bind('change:scrollwheel',     this._setScrollWheel, this);
+    this.map.bind('change:keyboard',        this._setKeyboard, this);
     this.map.bind('change:center',          this._setCenter, this);
     this.map.bind('change:attribution',     this._setAttribution, this);
   },
@@ -22393,6 +27518,7 @@ cdb.geo.MapView = cdb.core.View.extend({
     this.map.unbind('change:view_bounds_ne',  null, this);
     this.map.unbind('change:zoom',            null, this);
     this.map.unbind('change:scrollwheel',     null, this);
+    this.map.unbind('change:keyboard',        null, this);
     this.map.unbind('change:center',          null, this);
     this.map.unbind('change:attribution',     null, this);
   },
@@ -22563,15 +27689,23 @@ cdb.geo.ui.Text = cdb.core.View.extend({
     var boxWidth   = style["box-width"];
     var fontFamily = style["font-family-name"];
 
+    this.$text = this.$el.find(".text");
+
     this.$text.css(style);
     this.$text.css("font-size", style["font-size"] + "px");
 
+    this.$el.css("z-index", style["z-index"]);
+
     var fontFamilyClass = "";
 
-    if      (fontFamily  == "Droid Sans") fontFamilyClass = "droid";
-    else if (fontFamily  == "Vollkorn")   fontFamilyClass = "vollkorn";
-    else if (fontFamily  == "Open Sans")  fontFamilyClass = "open_sans";
-    else if (fontFamily  == "Roboto")     fontFamilyClass = "roboto";
+    if      (fontFamily  == "Droid Sans")       fontFamilyClass = "droid";
+    else if (fontFamily  == "Vollkorn")         fontFamilyClass = "vollkorn";
+    else if (fontFamily  == "Open Sans")        fontFamilyClass = "open_sans";
+    else if (fontFamily  == "Roboto")           fontFamilyClass = "roboto";
+    else if (fontFamily  == "Lato")             fontFamilyClass = "lato";
+    else if (fontFamily  == "Graduate")         fontFamilyClass = "graduate";
+    else if (fontFamily  == "Gravitas One")     fontFamilyClass = "gravitas_one";
+    else if (fontFamily  == "Old Standard TT")  fontFamilyClass = "old_standard_tt";
 
     var rgbaCol = 'rgba(' + parseInt(boxColor.slice(-6,-4),16)
     + ',' + parseInt(boxColor.slice(-4,-2),16)
@@ -22582,7 +27716,11 @@ cdb.geo.ui.Text = cdb.core.View.extend({
     .removeClass("droid")
     .removeClass("vollkorn")
     .removeClass("roboto")
-    .removeClass("open_sans");
+    .removeClass("open_sans")
+    .removeClass("lato")
+    .removeClass("graduate")
+    .removeClass("gravitas_one")
+    .removeClass("old_standard_tt");
 
     this.$el.addClass(fontFamilyClass);
     this.$el.css({
@@ -22653,15 +27791,386 @@ cdb.geo.ui.Text = cdb.core.View.extend({
 
   },
 
+  show: function(callback) {
+    this.$el.fadeIn(150, function() {
+      callback && callback();
+    });
+  },
+
+  hide: function(callback) {
+    this.$el.fadeOut(150, function() {
+      callback && callback();
+    });
+  },
+
+  _fixLinks: function() {
+
+    this.$el.find("a").each(function(i, link) {
+      $(this).attr("target", "_top");
+    });
+
+  },
+
   render: function() {
+    var text = cdb.core.sanitize.html(this.model.get("extra").rendered_text, this.model.get('sanitizeText'));
+    var data = _.chain(this.model.attributes).clone().extend({ text: text }).value();
+    this.$el.html(this.template(data));
 
-    this._place();
+    this._fixLinks();
 
-    this.$el.html(this.template(_.extend(this.model.attributes, { text: this.model.attributes.extra.rendered_text })));
+    var self = this;
+    setTimeout(function() {
+      self._applyStyle();
+      self._place();
+      self.show();
+    }, 900);
+
+    return this;
+
+  }
+
+});
+cdb.geo.ui.Annotation = cdb.core.View.extend({
+
+  className: "cartodb-overlay overlay-annotation",
+
+  defaults: {
+    minZoom: 0,
+    maxZoom: 40,
+    style: {
+      textAlign: "left",
+      zIndex: 5,
+      color: "#ffffff",
+      fontSize: "13",
+      fontFamilyName: "Helvetica",
+      boxColor: "#333333",
+      boxOpacity: 0.7,
+      boxPadding: 10,
+      lineWidth: 50,
+      lineColor: "#333333"
+    }
+  },
+
+  template: cdb.core.Template.compile(
+    '<div class="content">\
+    <div class="text widget_text">{{{ text }}}</div>\
+    <div class="stick"><div class="ball"></div></div>\
+    </div>',
+    'mustache'
+  ),
+
+  events: {
+    "click": "stopPropagation"
+  },
+
+  stopPropagation: function(e) {
+    e.stopPropagation();
+  },
+
+  initialize: function() {
+
+    this.template = this.options.template || this.template;
+    this.mapView  = this.options.mapView;
+
+    this.mobileEnabled = /Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+    this._cleanStyleProperties(this.options.style);
+
+    _.defaults(this.options.style, this.defaults.style);
+
+    this._setupModels();
+
+    this._bindMap();
+
+  },
+
+  _setupModels: function() {
+
+    this.model = new cdb.core.Model({ 
+      display: true,
+      hidden: false,
+      text:    this.options.text,
+      latlng:  this.options.latlng,
+      minZoom: this.options.minZoom || this.defaults.minZoom,
+      maxZoom: this.options.maxZoom || this.defaults.maxZoom
+    });
+
+    this.model.on("change:display", this._onChangeDisplay, this);
+    this.model.on("change:text",    this._onChangeText, this);
+    this.model.on('change:latlng',  this._place, this);
+
+    this.model.on('change:minZoom',  this._applyZoomLevelStyle, this);
+    this.model.on('change:maxZoom',  this._applyZoomLevelStyle, this);
+
+    this.style = new cdb.core.Model(this.options.style);
+
+    this.style.on("change", this._applyStyle, this);
+
+    this.add_related_model(this.style);
+
+  },
+
+  _bindMap: function() {
+
+    this.mapView.map.bind('change', this._place, this);
+    this.mapView.map.bind('change:zoom', this._applyZoomLevelStyle, this);
+    this.mapView.bind('zoomstart', this.hide, this);
+    this.mapView.bind('zoomend', this.show, this);
+
+  },
+
+  _unbindMap: function() {
+
+    this.mapView.map.unbind('change', this._place, this);
+    this.mapView.map.unbind('change:zoom', this._applyZoomLevelStyle, this);
+    this.mapView.unbind('zoomstart', this.hide, this);
+    this.mapView.unbind('zoomend', this.show, this);
+
+  },
+
+  _onChangeDisplay: function() {
+
+    if (this.model.get("display")) this.show();
+    else this.hide();
+
+  },
+
+  _onChangeText: function() {
+    this.$el.find(".text").html(this._sanitizedText());
+  },
+
+  _sanitizedText: function() {
+    return cdb.core.sanitize.html(this.model.get("text"), this.model.get('sanitizeText'));
+  },
+
+  _getStandardPropertyName: function(name) {
+
+    if (!name) return;
+    var parts = name.split("-");
+
+    if (parts.length === 1) return name;
+    else if (parts.length === 2) {
+      return parts[0] + parts[1].slice(0, 1).toUpperCase() + parts[1].slice(1);
+    }
+
+  },
+
+  _cleanStyleProperties: function(hash) {
+
+    var standardProperties = {};
+
+    _.each(hash, function(value, key) {
+      standardProperties[this._getStandardPropertyName(key)] = value;
+    }, this);
+
+    this.options.style = standardProperties;
+
+  },
+
+  _belongsToCanvas: function() {
+  
+    var mobile = (this.options.device === "mobile") ? true : false;
+    return mobile === this.mobileEnabled;
+  },
+
+  show: function(callback) {
+
+    if (this.model.get("hidden") || !this._belongsToCanvas()) return;
+
+    var self = this;
+
+    this.$el.css({ opacity: 0, display: "inline-table" }); // makes the element to behave fine in the borders of the screen
+    this.$el.stop().animate({ opacity: 1 }, { duration: 150, complete: function() {
+      callback && callback();
+    }});
+
+  },
+
+  hide: function(callback) {
+    this.$el.stop().fadeOut(150, function() {
+      callback && callback();
+    });
+  },
+
+  _place: function() {
+
+    var latlng     = this.model.get("latlng");
+
+    var lineWidth  = this.style.get("lineWidth");
+    var textAlign  = this.style.get("textAlign");
+
+    var pos        = this.mapView.latLonToPixel(latlng);
+
+    if (pos) {
+
+      var top        = pos.y - this.$el.height()/2;
+      var left       = pos.x + lineWidth;
+
+      if (textAlign === "right") {
+        left = pos.x - this.$el.width() - lineWidth - this.$el.find(".ball").width();
+      }
+
+      this.$el.css({ top: top, left: left });
+
+    }
+
+  },
+
+  setMinZoom: function(zoom) {
+
+    this.model.set("minZoom", zoom);
+
+  },
+
+  setMaxZoom: function(zoom) {
+
+    this.model.set("maxZoom", zoom);
+
+  },
+
+  setPosition: function(latlng) {
+
+    this.model.set("latlng", latlng);
+
+  },
+
+  setText: function(text) {
+
+    this.model.set("text", text);
+
+  },
+
+  setStyle: function(property, value) {
+
+    var standardProperty = this._getStandardPropertyName(property);
+
+    if (standardProperty) {
+      this.style.set(standardProperty, value);
+    }
+
+  },
+
+  _applyStyle: function() {
+
+    var textColor  = this.style.get("color");
+    var textAlign  = this.style.get("textAlign");
+    var boxColor   = this.style.get("boxColor");
+    var boxOpacity = this.style.get("boxOpacity");
+    var boxPadding = this.style.get("boxPadding");
+    var lineWidth  = this.style.get("lineWidth");
+    var lineColor  = this.style.get("lineColor");
+    var fontFamily = this.style.get("fontFamilyName");
 
     this.$text = this.$el.find(".text");
 
-    this._applyStyle();
+    this.$text.css({ color: textColor, textAlign: textAlign });
+
+    this.$el.find(".content").css("padding", boxPadding);
+    this.$text.css("font-size", this.style.get("fontSize") + "px");
+    this.$el.css("z-index", this.style.get("zIndex"));
+
+    this.$el.find(".stick").css({ width: lineWidth, left: -lineWidth });
+
+    var fontFamilyClass = "";
+
+    if      (fontFamily  == "Droid Sans")       fontFamilyClass = "droid";
+    else if (fontFamily  == "Vollkorn")         fontFamilyClass = "vollkorn";
+    else if (fontFamily  == "Open Sans")        fontFamilyClass = "open_sans";
+    else if (fontFamily  == "Roboto")           fontFamilyClass = "roboto";
+    else if (fontFamily  == "Lato")             fontFamilyClass = "lato";
+    else if (fontFamily  == "Graduate")         fontFamilyClass = "graduate";
+    else if (fontFamily  == "Gravitas One")     fontFamilyClass = "gravitas_one";
+    else if (fontFamily  == "Old Standard TT")  fontFamilyClass = "old_standard_tt";
+
+    this.$el
+    .removeClass("droid")
+    .removeClass("vollkorn")
+    .removeClass("roboto")
+    .removeClass("open_sans")
+    .removeClass("lato")
+    .removeClass("graduate")
+    .removeClass("gravitas_one")
+    .removeClass("old_standard_tt");
+
+    this.$el.addClass(fontFamilyClass);
+
+    if (textAlign === "right") {
+      this.$el.addClass("align-right");
+      this.$el.find(".stick").css({ left: "auto", right: -lineWidth });
+    } else {
+      this.$el.removeClass("align-right");
+    }
+
+    this._place();
+    this._applyZoomLevelStyle();
+
+  },
+
+  _getRGBA: function(color, opacity) {
+    return 'rgba(' + parseInt(color.slice(-6,-4),16)
+    + ',' + parseInt(color.slice(-4,-2),16)
+    + ',' + parseInt(color.slice(-2),16)
+    + ',' + opacity + ' )';
+  },
+
+  _applyZoomLevelStyle: function() {
+
+    var boxColor   = this.style.get("boxColor");
+    var boxOpacity = this.style.get("boxOpacity");
+    var lineColor  = this.style.get("lineColor");
+
+    var minZoom    = this.model.get("minZoom");
+    var maxZoom    = this.model.get("maxZoom");
+
+    var currentZoom = this.mapView.map.get("zoom");
+
+    if (currentZoom >= minZoom && currentZoom <= maxZoom) {
+
+      var rgbaLineCol = this._getRGBA(lineColor, 1);
+      var rgbaBoxCol  = this._getRGBA(boxColor, boxOpacity);
+
+      this.$el.find(".text").animate({ opacity: 1 }, 150);
+
+      this.$el.css("background-color", rgbaBoxCol);
+
+      this.$el.find(".stick").css("background-color", rgbaLineCol);
+      this.$el.find(".ball").css("background-color", rgbaLineCol);
+
+      this.model.set("hidden", false);
+      this.model.set("display", true);
+
+    } else {
+      this.model.set("hidden", true);
+      this.model.set("display", false);
+    }
+  },
+
+  clean: function() {
+    this._unbindMap();
+    cdb.core.View.prototype.clean.call(this);
+  },
+
+  _fixLinks: function() {
+
+    this.$el.find("a").each(function(i, link) {
+      $(this).attr("target", "_top");
+    });
+
+  },
+
+  render: function() {
+    var d = _.clone(this.model.attributes);
+    d.text = this._sanitizedText();
+    this.$el.html(this.template(d));
+
+    this._fixLinks();
+
+    var self = this;
+    setTimeout(function() {
+      self._applyStyle();
+      self._applyZoomLevelStyle();
+      self.show();
+    }, 500);
 
     return this;
 
@@ -22710,7 +28219,8 @@ cdb.geo.ui.Image = cdb.geo.ui.Text.extend({
     var boxOpacity = style["box-opacity"];
     var boxWidth   = style["box-width"];
 
-    this.$text.css(style);
+    this.$el.find(".text").css(style);
+    this.$el.css("z-index", style["z-index"]);
 
     var rgbaCol = 'rgba(' + parseInt(boxColor.slice(-6,-4),16)
     + ',' + parseInt(boxColor.slice(-4,-2),16)
@@ -22726,18 +28236,24 @@ cdb.geo.ui.Image = cdb.geo.ui.Text.extend({
   },
 
   render: function() {
+    var content;
+    if (this.model.get("extra").has_default_image) {
+      content = _.template('<img src="<%- url %>" />')({ url: this.model.get("extra").public_default_image_url });
+    } else {
+      content = cdb.core.sanitize.html(this.model.get("extra").rendered_text, this.model.get('sanitizeContent'));
+    }
 
-    this._place();
+    var data = _.chain(this.model.attributes).clone().extend({ content: content }).value();
+    this.$el.html(this.template(data));
 
-    var content = this.model.get("extra").rendered_text;
+    var self = this;
 
-    if (this.model.get("extra").has_default_image) content = '<img src="' + this.model.get("extra").public_default_image_url + '" />';
+    setTimeout(function() {
+      self._applyStyle();
+      self._place();
+      self.show();
+    }, 900);
 
-    this.$el.html(this.template(_.extend(this.model.attributes, { content: content })));
-
-    this.$text = this.$el.find(".text");
-
-    this._applyStyle();
 
     return this;
 
@@ -22837,6 +28353,8 @@ cdb.geo.ui.Share = cdb.core.View.extend({
 
     $(".cartodb-map-wrapper").append(this.dialog.render().$el);
 
+    this.addView(this.dialog);
+
   },
 
   render: function() {
@@ -22935,166 +28453,6 @@ cdb.geo.ui.ZoomInfo = cdb.core.View.extend({
     return this;
   }
 });
-cdb.geo.ui.Mobile = cdb.core.View.extend({
-
-  className: "cartodb-mobile",
-
-  events: {
-    'click .toggle': '_toggle',
-    "dragstart":      "_stopPropagation",
-    "mousedown":      "_stopPropagation",
-    "touchstart":     "_stopPropagation",
-    "MSPointerDown":  "_stopPropagation",
-    "dblclick":       "_stopPropagation",
-    "mousewheel":     "_stopPropagation",
-    "DOMMouseScroll": "_stopPropagation",
-    "click":          "_stopPropagation"
-  },
-
-  default_options: {
-    timeout: 0,
-    msg: ''
-  },
-
-  _stopPropagation: function(ev) {
-    ev.stopPropagation();
-  },
-
-  doOnOrientationChange: function() {
-
-    switch(window.orientation)
-    {
-      case -90:
-      case 90: this.recalc("landscape");
-        break;
-      default: this.recalc("portrait");
-        break;
-    }
-  },
-
-  recalc: function(orientation) {
-
-    var height = $(".legends > div.cartodb-legend-stack").height();
-
-    if (this.$el.hasClass("open") && height < 100 && !this.$el.hasClass("torque")) {
-      this.$el.css("height", height);
-      this.$el.find(".top-shadow").hide();
-      this.$el.find(".bottom-shadow").hide();
-    } else if (this.$el.hasClass("open") && height < 100 && this.$el.hasClass("legends") && this.$el.hasClass("torque")) {
-      this.$el.css("height", height + $(".legends > div.torque").height() );
-      this.$el.find(".top-shadow").hide();
-      this.$el.find(".bottom-shadow").hide();
-    }
-
-  },
-
-  initialize: function() {
-    this.map = this.model;
-
-    _.defaults(this.options, this.default_options);
-
-    this.template = this.options.template ? this.options.template : cdb.templates.getTemplate('geo/zoom');
-
-    window.addEventListener('orientationchange', _.bind(this.doOnOrientationChange, this));
-
-  },
-
-  _toggle: function(e) {
-
-    e.preventDefault();
-    e.stopPropagation();
-
-    if (this.isOpen) this.close();
-    else this.open();
-
-  },
-
-  open: function() {
-    var self = this;
-
-    this.$el.addClass("open");
-    this.isOpen = true;
-    this.$el.css("height", "110");
-
-    this.recalc();
-  },
-
-  close: function() {
-
-    var self = this;
-
-    this.$el.removeClass("open");
-    this.isOpen = false;
-
-    this.$el.css("height", "40");
-
-    this._fixTorque();
-
-  },
-
-  _fixTorque: function() {
-
-    var self = this;
-
-    setTimeout(function() {
-      var w = self.$el.width() - self.$el.find(".toggle").width() - self.$el.find(".time").width();
-      if (self.hasLegends) w -= 40;
-      if (!self.hasLegends) w -= self.$el.find(".controls").width();
-      self.$el.find(".slider-wrapper").css("width", w)
-      self.$el.find(".slider-wrapper").show();
-
-    }, 50);
-
-  },
-
-  render: function() {
-
-    this.$el.html(this.template(this.options));
-    var width = $(document).width() - 40;
-    this.$el.css( { width: width })
-
-    if (this.options.torqueLayer) {
-
-      this.hasTorque = true;
-
-      this.slider = new cdb.geo.ui.TimeSlider({type: "time_slider", layer: this.options.torqueLayer, map: this.options.map, pos_margin: 0, position: "none" , width: "auto" });
-
-      this.slider.bind("time_clicked", function() {
-        this.slider.toggleTime();
-      }, this);
-
-      this.$el.find(".torque").append(this.slider.render().$el);
-      this.$el.addClass("torque");
-      this.$el.find(".slider-wrapper").hide();
-
-    }
-
-    if (this.options.legends) {
-
-      this.$el.find(".legends").append(this.options.legends.render().$el);
-
-      var visible = _.some(this.options.legends._models, function(model) {
-        return model.get("template") || (model.get("type") != 'none' && model.get("items").length > 0)
-      });
-
-      if (visible) {
-        this.$el.addClass("legends");
-        this.hasLegends = true;
-        this.$el.find(".controls").hide();
-      }
-
-    }
-
-    if (this.hasTorque && !this.hasLegends) {
-      this.$el.find(".toggle").hide();
-    }
-
-    if (this.hasTorque) this._fixTorque();
-
-    return this;
-  }
-
-});
 /*
  * Model for the legend item
  *
@@ -23139,7 +28497,7 @@ cdb.geo.ui.LegendItem = cdb.core.View.extend({
   render: function() {
 
     var value;
-
+    this.model.attributes.name = ""+this.model.attributes.name;
     if (this.model.get("type") == 'image' && this.model.get("value")) {
       value = "url( " + this.model.get("value") + ")";
     } else {
@@ -23378,7 +28736,7 @@ cdb.geo.ui.ChoroplethLegend = cdb.geo.ui.BaseLegend.extend({
 
   className: "choropleth-legend",
 
-  template: _.template('<% if (title && show_title) { %>\n<div class="legend-title"><%= title %></div><% } %><ul><li class="min">\t\t<%= leftLabel %></li><li class="max">\t\t<%= rightLabel %></li><li class="graph count_<%= buckets_count %>">\t<div class="colors"><%= colors %>\n\t</div></li></ul>'),
+  template: _.template('<% if (title && show_title) { %>\n<div class="legend-title"><%- title %></div><% } %><ul><li class="min">\t\t<%- leftLabel %></li><li class="max">\t\t<%- rightLabel %></li><li class="graph count_<%- buckets_count %>">\t<div class="colors"><%= colors %>\n\t</div></li></ul>'),
 
   initialize: function() {
 
@@ -23428,7 +28786,7 @@ cdb.geo.ui.ChoroplethLegend = cdb.geo.ui.BaseLegend.extend({
 
     if (this.model.get("template")) {
 
-      var template = _.template(this.model.get("template"));
+      var template = _.template(cdb.core.sanitize.html(this.model.get("template"), this.model.get('sanitizeTemplate')));
       this.$el.html(template(this.model.toJSON()));
 
     } else {
@@ -23464,7 +28822,7 @@ cdb.geo.ui.DensityLegend = cdb.geo.ui.BaseLegend.extend({
 
   className: "density-legend",
 
-  template: _.template('<% if (title && show_title) { %>\n<div class="legend-title"><%= title %></div><% } %><ul><li class="min">\t<%= leftLabel %></li><li class="max">\t<%= rightLabel %></li><li class="graph count_<%= buckets_count %>">\t<div class="colors"><%= colors %>\n\t</div></li></ul>'),
+  template: _.template('<% if (title && show_title) { %>\n<div class="legend-title"><%- title %></div><% } %><ul><li class="min">\t<%- leftLabel %></li><li class="max">\t<%- rightLabel %></li><li class="graph count_<%- buckets_count %>">\t<div class="colors"><%= colors %>\n\t</div></li></ul>'),
 
   initialize: function() {
 
@@ -23517,7 +28875,7 @@ cdb.geo.ui.DensityLegend = cdb.geo.ui.BaseLegend.extend({
 
     if (this.model.get("template")) {
 
-      var template = _.template(this.model.get("template"));
+      var template = _.template(cdb.core.sanitize.html(this.model.get("template"), this.model.get('sanitizeTemplate')));
       this.$el.html(template(this.model.toJSON()));
 
     } else {
@@ -23607,7 +28965,7 @@ cdb.geo.ui.IntensityLegend = cdb.geo.ui.BaseLegend.extend({
 
   className: "intensity-legend",
 
-  template: _.template('<% if (title && show_title) { %>\n<div class="legend-title"><%= title %></div><% } %><ul><li class="min">\t<%= leftLabel %></li><li class="max">\t<%= rightLabel %></li><li class="graph"></li></ul>'),
+  template: _.template('<% if (title && show_title) { %>\n<div class="legend-title"><%- title %></div><% } %><ul><li class="min">\t<%- leftLabel %></li><li class="max">\t<%- rightLabel %></li><li class="graph"></li></ul>'),
 
   initialize: function() {
 
@@ -23711,7 +29069,7 @@ cdb.geo.ui.IntensityLegend = cdb.geo.ui.BaseLegend.extend({
 
     if (this.model.get("template")) {
 
-      var template = _.template(this.model.get("template"));
+      var template = _.template(cdb.core.sanitize.html(this.model.get("template"), this.model.get('sanitizeTemplate')));
       this.$el.html(template(this.model.toJSON()));
 
     } else {
@@ -23748,7 +29106,7 @@ cdb.geo.ui.CategoryLegend = cdb.geo.ui.BaseLegend.extend({
 
   className: "category-legend",
 
-  template: _.template('<% if (title && show_title) { %>\n<div class="legend-title"><%= title %></div><% } %><ul></ul>'),
+  template: _.template('<% if (title && show_title) { %>\n<div class="legend-title"><%- title %></div><% } %><ul></ul>'),
 
   initialize: function() {
 
@@ -23773,7 +29131,7 @@ cdb.geo.ui.CategoryLegend = cdb.geo.ui.BaseLegend.extend({
     view = new cdb.geo.ui.LegendItem({
       model: item,
       className: (item.get("value") && item.get("value").indexOf("http") >= 0 || item.get("type") && item.get("type") == 'image') ? "bkg" : "",
-      template: '\t\t<div class="bullet" style="background: <%= value %>"></div> <%= name || ((name === false) ? "false": "null") %>'
+      template: '\t\t<div class="bullet" style="background: <%= value %>"></div> <%- name || ((name === false) ? "false": "null") %>'
     });
 
     this.$el.find("ul").append(view.render());
@@ -23784,7 +29142,7 @@ cdb.geo.ui.CategoryLegend = cdb.geo.ui.BaseLegend.extend({
 
     if (this.model.get("template")) {
 
-      var template = _.template(this.model.get("template"));
+      var template = _.template(cdb.core.sanitize.html(this.model.get("template"), this.model.get('sanitizeTemplate')));
       this.$el.html(template(this.model.toJSON()));
 
     } else {
@@ -23850,7 +29208,7 @@ cdb.geo.ui.ColorLegend = cdb.geo.ui.BaseLegend.extend({
 
   type: "color",
 
-  template: _.template('<% if (title && show_title) { %>\n<div class="legend-title"><%= title %></div><% } %><ul></ul>'),
+  template: _.template('<% if (title && show_title) { %>\n<div class="legend-title"><%- title %></div><% } %><ul></ul>'),
 
   initialize: function() {
 
@@ -23869,7 +29227,7 @@ cdb.geo.ui.ColorLegend = cdb.geo.ui.BaseLegend.extend({
     view = new cdb.geo.ui.LegendItem({
       model: item,
       className: (item.get("value") && item.get("value").indexOf("http") >= 0) ? "bkg" : "",
-      template: '\t\t<div class="bullet" style="background: <%= value %>"></div> <%= name || ((name === false) ? "false": "null") %>'
+      template: '\t\t<div class="bullet" style="background: <%= value %>"></div> <%- name || ((name === false) ? "false": "null") %>'
     });
 
     this.$el.find("ul").append(view.render());
@@ -24160,7 +29518,7 @@ cdb.geo.ui.CustomLegend = cdb.geo.ui.BaseLegend.extend({
   className: "custom-legend",
   type: "custom",
 
-  template: _.template('<% if (title && show_title) { %>\n<div class="legend-title"><%= title %></div><% } %><ul></ul>'),
+  template: _.template('<% if (title && show_title) { %>\n<div class="legend-title"><%- title %></div><% } %><ul></ul>'),
 
   initialize: function() {
 
@@ -24187,7 +29545,7 @@ cdb.geo.ui.CustomLegend = cdb.geo.ui.BaseLegend.extend({
     view = new cdb.geo.ui.LegendItem({
       model: item,
       className: (item.get("value") && item.get("value").indexOf("http") >= 0) ? "bkg" : "",
-      template: '\t\t<div class="bullet" style="background:<%= value %>"></div>\n\t\t<%= name || "null" %>'
+      template: '\t\t<div class="bullet" style="background:<%= value %>"></div>\n\t\t<%- name || "null" %>'
     });
 
     this.$el.find("ul").append(view.render());
@@ -24198,7 +29556,7 @@ cdb.geo.ui.CustomLegend = cdb.geo.ui.BaseLegend.extend({
 
     if (this.model.get("template")) {
 
-      var template = _.template(this.model.get("template"));
+      var template = _.template(cdb.core.sanitize.html(this.model.get("template"), this.model.get('sanitizeTemplate')));
       this.$el.html(template(this.model.toJSON()));
 
     } else {
@@ -24259,7 +29617,7 @@ cdb.geo.ui.BubbleLegend = cdb.geo.ui.BaseLegend.extend({
 
   className: "bubble-legend",
 
-  template: _.template('<% if (title && show_title) { %>\n<div class="legend-title"><%= title %></div><% } %><ul><li>\t<%= min %></li><li class="graph">\t\t<div class="bubbles"></div></li><li>\t<%= max %></li></ul>'),
+  template: _.template('<% if (title && show_title) { %>\n<div class="legend-title"><%- title %></div><% } %><ul><li>\t<%- min %></li><li class="graph">\t\t<div class="bubbles"></div></li><li>\t<%- max %></li></ul>'),
 
   initialize: function() {
 
@@ -24293,7 +29651,7 @@ cdb.geo.ui.BubbleLegend = cdb.geo.ui.BaseLegend.extend({
 
     if (this.model.get("template")) {
 
-      var template = _.template(this.model.get("template"));
+      var template = _.template(cdb.core.sanitize.html(this.model.get("template"), this.model.get('sanitizeTemplate')));
       this.$el.html(template(this.model.toJSON()));
 
       this.$el.removeClass("bubble-legend");
@@ -24750,6 +30108,13 @@ cdb.geo.ui.InfowindowModel = Backbone.Model.extend({
   updateContent: function(attributes) {
     var fields = this.get('fields');
     this.set('content', cdb.geo.ui.InfowindowModel.contentForFields(attributes, fields));
+  },
+
+  closeInfowindow: function(){
+  if (this.get('visibility')) {
+      this.set("visibility", false);
+      this.trigger('close');
+    }
   }
 
 }, {
@@ -24757,13 +30122,13 @@ cdb.geo.ui.InfowindowModel = Backbone.Model.extend({
     options = options || {};
     var render_fields = [];
     for(var j = 0; j < fields.length; ++j) {
-      var f = fields[j];
-      var value = String(attributes[f.name]);
-      if(options.empty_fields || (attributes[f.name] !== undefined && value != "")) {
+      var field = fields[j];
+      var value = attributes[field.name];
+      if(options.empty_fields || (value !== undefined && value !== null)) {
         render_fields.push({
-          title: f.title ? f.name : null,
-          value: attributes[f.name],
-          index: j ? j : null
+          title: field.title ? field.name : null,
+          value: attributes[field.name],
+          index: j
         });
       }
     }
@@ -24773,7 +30138,7 @@ cdb.geo.ui.InfowindowModel = Backbone.Model.extend({
       render_fields.push({
         title: null,
         value: 'No data available',
-        index: j ? j : null,
+        index: 0,
         type: 'empty'
       });
     }
@@ -24836,6 +30201,7 @@ cdb.geo.ui.Infowindow = cdb.core.View.extend({
     this.model.bind('change:latlng',              this._update, this);
     this.model.bind('change:visibility',          this.toggle, this);
     this.model.bind('change:template',            this._compileTemplate, this);
+    this.model.bind('change:sanitizeTemplate',    this._compileTemplate, this);
     this.model.bind('change:alternative_names',   this.render, this);
     this.model.bind('change:width',               this.render, this);
     this.model.bind('change:maxHeight',           this.render, this);
@@ -24869,7 +30235,7 @@ cdb.geo.ui.Infowindow = cdb.core.View.extend({
       if ($jscrollpane.length > 0 && $jscrollpane.data() != null) {
         $jscrollpane.data().jsp && $jscrollpane.data().jsp.destroy();
       }
-      
+
       // Clone fields and template name
       var fields = _.map(this.model.attributes.content.fields, function(field){
         return _.clone(field);
@@ -24899,7 +30265,9 @@ cdb.geo.ui.Infowindow = cdb.core.View.extend({
           }
         },values);
 
-      this.$el.html(this.template(obj));
+      this.$el.html(
+        cdb.core.sanitize.html(this.template(obj), this.model.get('sanitizeTemplate'))
+      );
 
       // Set width and max-height from the model only
       // If there is no width set, we don't force our infowindow
@@ -25450,30 +30818,38 @@ cdb.geo.ui.Header = cdb.core.View.extend({
   },
 
   show: function() {
-
     //var display        = this.model.get("display");
     var hasTitle       = this.model.get("title") && this.model.get("show_title");
     var hasDescription = this.model.get("description") && this.model.get("show_description");
 
     if (hasTitle || hasDescription) {
-
-      var self = this;
-
       this.$el.show();
-
-      if (hasTitle)       self.$title.show();
-      if (hasDescription) self.$description.show();
-
+      if (hasTitle)       this.$el.find(".content div.title").show();
+      if (hasDescription) this.$el.find(".content div.description").show();
     }
+  },
 
+  // Add target attribute to all links
+  _setLinksTarget: function(str) {
+    if (!str) return str;
+    var reg = new RegExp(/<(a)([^>]+)>/g);
+    return str.replace(reg, "<$1 target=\"_blank\"$2>");
   },
 
   render: function() {
+    var data = _.clone(this.model.attributes);
+    data.title = cdb.core.sanitize.html(data.title);
+    data.description = this._setLinksTarget(cdb.core.sanitize.html(data.description));
+    this.$el.html(this.options.template(data));
 
-    this.$el.html(this.options.template(this.model.attributes));
+    if (this.options.slides) {
+      this.slides_controller = new cdb.geo.ui.SlidesController({
+        transitions: this.options.transitions,
+        slides: this.options.slides
+      });
 
-    this.$title       = this.$el.find(".content div.title");
-    this.$description = this.$el.find(".content div.description");
+      this.$el.append(this.slides_controller.render().$el);
+    }
 
     if (this.model.get("show_title") || this.model.get("show_description")) {
       this.show();
@@ -25641,7 +31017,8 @@ cdb.geo.ui.LayerSelector = cdb.core.View.extend({
           m.set('order', i);
           m.set('type', 'layergroup');
 
-          m.set('visible', !layerGroupView.getSubLayer(i).get('hidden'));
+          if (m.get("visible") === undefined) m.set('visible', true);
+
           m.bind('change:visible', function(model) {
             this.trigger("change:visible", model.get('visible'), model.get('order'), model);
           }, self);
@@ -25721,8 +31098,8 @@ cdb.geo.ui.LayerView = cdb.core.View.extend({
 
   defaults: {
     template: '\
-      <a class="layer" href="#/change-layer"><%= layer_name %></a>\
-      <a href="#switch" class="right <%= visible ? "enabled" : "disabled" %> switch"><span class="handle"></span></a>\
+      <a class="layer" href="#/change-layer"><%- layer_name %></a>\
+      <a href="#switch" class="right <%- visible ? "enabled" : "disabled" %> switch"><span class="handle"></span></a>\
     '
   },
 
@@ -25801,6 +31178,953 @@ cdb.geo.ui.LayerViewFromLayerGroup = cdb.geo.ui.LayerView.extend({
       sublayer.hide();
     }
   }
+});
+cdb.geo.ui.SlidesControllerItem = cdb.core.View.extend({
+
+  tagName: "li",
+
+  events: {
+    "click a": "_onClick",
+  },
+
+  template: cdb.core.Template.compile('<a href="#" class="<%- transition_trigger %>"></a>'),
+
+  initialize: function() {
+
+    this.model = new cdb.core.Model(this.options);
+    this.model.bind("change:active", this._onChangeActive, this);
+
+  },
+
+  _onChangeActive: function(e) {
+
+    if (this.model.get("active")) {
+      this.$el.find("a").addClass("active");
+    } else {
+      this.$el.find("a").removeClass("active");
+    }
+
+  },
+
+  _onClick: function(e) {
+    if (e) this.killEvent(e);
+    this.trigger("onClick", this)
+  },
+
+  render: function() {
+
+    var options = _.extend({ transition_trigger: "click" }, this.options.transition_options);
+
+    this.$el.html(this.template(options));
+
+    this._onChangeActive();
+
+    return this;
+  }
+
+});
+
+cdb.geo.ui.SlidesController = cdb.core.View.extend({
+
+  defaults: {
+    show_counter: false
+  },
+
+  events: {
+    'click a.next': "_next",
+    'click a.prev': "_prev"
+  },
+
+  tagName: "div",
+
+  className: "cartodb-slides-controller",
+
+  template: cdb.core.Template.compile("<div class='slides-controller-content'><a href='#' class='prev'></a><% if (show_counter) {%><div class='counter'></div><% } else { %><ul></ul><% } %><a href='#' class='next'></a></div>"),
+
+  initialize: function() {
+    this.slidesCount = this.options.transitions.length;
+    this.visualization = this.options.visualization;
+    this.slides = this.visualization.slides;
+  },
+
+  _prev: function(e) {
+    if (e) this.killEvent(e);
+    this.visualization.sequence.prev();
+  },
+
+  _next: function(e) {
+    if (e) this.killEvent(e);
+    this.visualization.sequence.next();
+  },
+
+  _renderDots: function() {
+
+    var currentActiveSlide = this.slides.state();
+
+    for (var i = 0; i < this.options.transitions.length; i++) {
+      var item = new cdb.geo.ui.SlidesControllerItem({ num: i, transition_options: this.options.transitions[i], active: i == currentActiveSlide });
+      item.bind("onClick", this._onSlideClick, this);
+      this.$el.find("ul").append(item.render().$el);
+    }
+
+  },
+
+  _renderCounter: function() {
+
+    var currentActiveSlide = this.slides.state();
+    var currentTransition = this.options.transitions[currentActiveSlide];
+
+    var $counter = this.$el.find(".counter");
+
+    if (currentTransition && currentTransition.transition_trigger === "time") {
+      $counter.addClass("loading");
+    } else {
+      $counter.removeClass("loading");
+    }
+
+    $counter.html((currentActiveSlide + 1) + "/" + this.options.transitions.length)
+  },
+
+  _onSlideClick: function(slide) {
+    this.visualization.sequence.current(slide.options.num);
+  },
+
+  render: function() {
+
+    var options = _.extend(this.defaults, this.options);
+
+    this.$el.html(this.template(options));
+
+    if (this.slides && this.options.transitions) {
+
+      if (options.show_counter) {
+        this._renderCounter(); // we render: 1/N
+      } else {
+        this._renderDots(); // we render a list of dots
+      }
+
+    }
+
+    return this;
+  }
+
+});
+cdb.geo.ui.MobileLayer = cdb.core.View.extend({
+
+  events: {
+    'click h3':    "_toggle",
+    "dblclick":  "_stopPropagation"
+  },
+
+  tagName: "li",
+
+  className: "cartodb-mobile-layer has-toggle",
+
+  template: cdb.core.Template.compile("<% if (show_title) { %><h3><%- layer_name %><% } %><a href='#' class='toggle<%- toggle_class %>'></a></h3>"),
+
+  /**
+   *  Stop event propagation
+   */
+  _stopPropagation: function(ev) {
+    ev.stopPropagation();
+  },
+
+  initialize: function() {
+
+    _.defaults(this.options, this.default_options);
+
+    this.model.bind("change:visible", this._onChangeVisible, this);
+
+  },
+
+  _onChangeVisible: function() {
+
+    this.$el.find(".legend")[ this.model.get("visible") ? "fadeIn":"fadeOut"](150);
+    this.$el[ this.model.get("visible") ? "removeClass":"addClass"]("hidden");
+
+    this.trigger("change_visibility", this);
+
+  },
+
+  _toggle: function(e) {
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (this.options.hide_toggle) return;
+
+    this.model.set("visible", !this.model.get("visible"))
+
+  },
+
+  _renderLegend: function() {
+
+    if (!this.options.show_legends) return;
+
+    if (this.model.get("legend") && (this.model.get("legend").type == "none" || !this.model.get("legend").type)) return;
+    if (this.model.get("legend") && this.model.get("legend").items && this.model.get("legend").items.length == 0) return;
+
+    this.$el.addClass("has-legend");
+
+    var legend = new cdb.geo.ui.Legend(this.model.get("legend"));
+
+    legend.undelegateEvents();
+
+    this.$el.append(legend.render().$el);
+
+  },
+
+  _truncate: function(input, length) {
+    return input.substr(0, length-1) + (input.length > length ? '&hellip;' : '');
+  },
+
+  render: function() {
+
+    var layer_name = this.model.get("layer_name");
+
+    layer_name = layer_name ? this._truncate(layer_name, 23) : "untitled";
+
+    var attributes = _.extend(
+      this.model.attributes,
+      {
+        layer_name:   this.options.show_title ? layer_name : "",
+        toggle_class: this.options.hide_toggle ? " hide" : ""
+      }
+    );
+
+    this.$el.html(this.template(_.extend(attributes, { show_title: this.options.show_title } )));
+
+
+    if (this.options.hide_toggle)   this.$el.removeClass("has-toggle");
+    if (!this.model.get("visible")) this.$el.addClass("hidden");
+    if (this.model.get("legend"))   this._renderLegend();
+
+    this._onChangeVisible();
+
+    return this;
+  }
+
+});
+
+cdb.geo.ui.Mobile = cdb.core.View.extend({
+
+  className: "cartodb-mobile",
+
+  events: {
+    "click .cartodb-attribution-button": "_onAttributionClick",
+    "click .toggle":                     "_toggle",
+    "click .fullscreen":                 "_toggleFullScreen",
+    "click .backdrop":                   "_onBackdropClick",
+    "dblclick .aside":                   "_stopPropagation",
+    "dragstart .aside":                  "_checkOrigin",
+    "mousedown .aside":                  "_checkOrigin",
+    "touchstart .aside":                 "_checkOrigin",
+    "MSPointerDown .aside":              "_checkOrigin",
+  },
+
+  initialize: function() {
+
+    _.bindAll(this, "_toggle", "_reInitScrollpane");
+
+    _.defaults(this.options, this.default_options);
+
+    this.hasLayerSelector = false;
+    this.layersLoading    = 0;
+
+    this.slides_data   = this.options.slides_data;
+    this.visualization = this.options.visualization;
+
+    if (this.visualization) {
+      this.slides      = this.visualization.slides;
+    }
+
+    this.mobileEnabled = /Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+    this.visibility_options = this.options.visibility_options || {};
+
+    this.mapView  = this.options.mapView;
+    this.map      = this.mapView.map;
+
+    this.template = this.options.template ? this.options.template : cdb.templates.getTemplate('geo/zoom');
+
+    this._selectOverlays();
+
+    this._setupModel();
+
+    window.addEventListener('orientationchange', _.bind(this.doOnOrientationChange, this));
+
+    this._addWheelEvent();
+
+  },
+
+  loadingTiles: function() {
+    if (this.loader) {
+      this.loader.show()
+    }
+
+    if (this.layersLoading === 0) {
+      this.trigger('loading');
+    }
+    this.layersLoading++;
+  },
+
+  loadTiles: function() {
+    if (this.loader) {
+      this.loader.hide();
+    }
+    this.layersLoading--;
+    // check less than 0 because loading event sometimes is
+    // thrown before visualization creation
+    if(this.layersLoading <= 0) {
+      this.layersLoading = 0;
+      this.trigger('load');
+    }
+  },
+
+  _selectOverlays: function() {
+
+    if (this.slides && this.slides_data) { // if there are slides…
+
+      var state = this.slides.state();
+
+      if (state == 0) this.overlays = this.options.overlays; // first slide == master vis
+      else {
+        this.overlays = this.slides_data[state - 1].overlays;
+      }
+    } else { // otherwise we load the regular overlays
+      this.overlays = this.options.overlays;
+    }
+
+  },
+
+  _addWheelEvent: function() {
+
+      var self    = this;
+      var mapView = this.options.mapView;
+
+      $(document).on('webkitfullscreenchange mozfullscreenchange fullscreenchange', function() {
+
+        if ( !document.fullscreenElement && !document.webkitFullscreenElement && !document.mozFullScreenElement && !document.msFullscreenElement) {
+          mapView.options.map.set("scrollwheel", false);
+        }
+
+        mapView.invalidateSize();
+
+      });
+
+  },
+
+  _setupModel: function() {
+
+    this.model = new Backbone.Model({
+      open: false,
+      layer_count: 0
+    });
+
+    this.model.on("change:open", this._onChangeOpen, this);
+    this.model.on("change:layer_count", this._onChangeLayerCount, this);
+
+  },
+
+  /**
+   *  Check event origin
+   */
+  _checkOrigin: function(ev) {
+    // If the mouse down come from jspVerticalBar
+    // dont stop the propagation, but if the event
+    // is a touchstart, stop the propagation
+    var come_from_scroll = (($(ev.target).closest(".jspVerticalBar").length > 0) && (ev.type != "touchstart"));
+
+    if (!come_from_scroll) {
+      ev.stopPropagation();
+    }
+  },
+
+  _stopPropagation: function(ev) {
+    ev.stopPropagation();
+  },
+
+  _onBackdropClick: function(e) {
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    this.$el.find(".backdrop").fadeOut(250);
+    this.$el.find(".cartodb-attribution").fadeOut(250);
+
+  },
+
+  _onAttributionClick: function(e) {
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    this.$el.find(".backdrop").fadeIn(250);
+    this.$el.find(".cartodb-attribution").fadeIn(250);
+
+  },
+
+  _toggle: function(e) {
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    this.model.set("open", !this.model.get("open"));
+
+  },
+
+  _toggleFullScreen: function(ev) {
+
+    ev.stopPropagation();
+    ev.preventDefault();
+
+    var doc   = window.document;
+    var docEl = $("#map > div")[0];
+
+    var requestFullScreen = docEl.requestFullscreen || docEl.mozRequestFullScreen || docEl.webkitRequestFullScreen;
+    var cancelFullScreen  = doc.exitFullscreen || doc.mozCancelFullScreen || doc.webkitExitFullscreen;
+
+    var mapView = this.options.mapView;
+
+    if (!doc.fullscreenElement && !doc.mozFullScreenElement && !doc.webkitFullscreenElement) {
+
+      requestFullScreen.call(docEl);
+
+      if (mapView) {
+
+        mapView.options.map.set("scrollwheel", true);
+
+      }
+
+    } else {
+
+      cancelFullScreen.call(doc);
+
+    }
+  },
+
+  _open: function() {
+
+    var right = this.$el.find(".aside").width();
+
+    this.$el.find(".cartodb-header").animate({ right: right }, 200)
+    this.$el.find(".aside").animate({ right: 0 }, 200)
+    this.$el.find(".cartodb-attribution-button").animate({ right: right + parseInt(this.$el.find(".cartodb-attribution-button").css("right")) }, 200)
+    this.$el.find(".cartodb-attribution").animate({ right: right + parseInt(this.$el.find(".cartodb-attribution-button").css("right")) }, 200)
+    this._initScrollPane();
+
+  },
+
+  _close: function() {
+
+    this.$el.find(".cartodb-header").animate({ right: 0 }, 200)
+    this.$el.find(".aside").animate({ right: - this.$el.find(".aside").width() }, 200)
+    this.$el.find(".cartodb-attribution-button").animate({ right: 20 }, 200)
+    this.$el.find(".cartodb-attribution").animate({ right: 20 }, 200)
+
+  },
+
+  default_options: {
+    timeout: 0,
+    msg: ''
+  },
+
+  _stopPropagation: function(ev) {
+    ev.stopPropagation();
+  },
+
+  doOnOrientationChange: function() {
+
+    switch(window.orientation)
+    {
+      case -90:
+      case 90: this.recalc("landscape");
+        break;
+      default: this.recalc("portrait");
+        break;
+    }
+  },
+
+  recalc: function(orientation) {
+
+    var height = $(".legends > div.cartodb-legend-stack").height();
+
+    if (this.$el.hasClass("open") && height < 100 && !this.$el.hasClass("torque")) {
+
+      this.$el.css("height", height);
+      this.$el.find(".top-shadow").hide();
+      this.$el.find(".bottom-shadow").hide();
+
+    } else if (this.$el.hasClass("open") && height < 100 && this.$el.hasClass("legends") && this.$el.hasClass("torque")) {
+
+      this.$el.css("height", height + $(".legends > div.torque").height() );
+      this.$el.find(".top-shadow").hide();
+      this.$el.find(".bottom-shadow").hide();
+
+    }
+
+  },
+
+  _onChangeLayerCount: function() {
+
+    var layer_count = this.model.get("layer_count");
+    var msg = layer_count + " layer" + (layer_count != 1 ? "s" : "");
+    this.$el.find(".aside .layer-container > h3").html(msg);
+
+  },
+
+  _onChangeOpen: function() {
+    this.model.get("open") ? this._open() : this._close();
+  },
+
+  _createLayer: function(_class, opts) {
+    return new cdb.geo.ui[_class](opts);
+  },
+
+  _getLayers: function() {
+
+    this.layers = [];
+
+    // we add the layers to the array depending on the method used
+    // to sent us the layers
+    if (this.options.layerView) {
+      this._getLayersFromLayerView();
+    } else {
+      _.each(this.map.layers.models, this._getLayer, this);
+    }
+
+  },
+
+  _getLayersFromLayerView: function() {
+
+    if (this.options.layerView && this.options.layerView.model.get("type") == "layergroup") {
+
+      this.layers = _.map(this.options.layerView.layers, function(l, i) {
+
+        var m = new cdb.core.Model(l);
+
+        m.set('order', i);
+        m.set('type', 'layergroup');
+        m.set('visible', l.visible);
+        m.set('layer_name', l.options.layer_name);
+
+        layerView = this._createLayer('LayerViewFromLayerGroup', {
+          model: m,
+          layerView: this.options.layerView,
+          layerIndex: i
+        });
+
+        return layerView.model;
+
+      }, this);
+
+    } else if (this.options.layerView && (this.options.layerView.model.get("type") == "torque")) {
+
+      var layerView = this._createLayer('LayerView', { model: this.options.layerView.model });
+
+      this.layers.push(layerView.model);
+
+    }
+  },
+
+  _getLayer: function(layer) {
+
+    if (layer.get("type") == 'layergroup' || layer.get('type') === 'namedmap') {
+
+      var layerGroupView = this.mapView.getLayerByCid(layer.cid);
+
+      for (var i = 0 ; i < layerGroupView.getLayerCount(); ++i) {
+
+        var l = layerGroupView.getLayer(i);
+        var m = new cdb.core.Model(l);
+
+        m.set('order', i);
+        m.set('type', 'layergroup');
+        m.set('visible', l.visible);
+        m.set('layer_name', l.options.layer_name);
+
+        layerView = this._createLayer('LayerViewFromLayerGroup', {
+          model: m,
+          layerView: layerGroupView,
+          layerIndex: i
+        });
+
+        this.layers.push(layerView.model);
+
+      }
+
+    } else if (layer.get("type") === "CartoDB" || layer.get('type') === 'torque') {
+
+      if (layer.get('type') === 'torque')  {
+        layer.on("change:visible", this._toggleSlider, this);
+      }
+
+      this.layers.push(layer);
+
+    }
+
+  },
+
+  _toggleSlider: function(m) {
+
+    if (m.get("visible")) {
+      this.$el.addClass("with-torque");
+      this.slider.show();
+    } else {
+      this.$el.removeClass("with-torque");
+      this.slider.hide();
+    }
+
+  },
+
+  _reInitScrollpane: function() {
+    this.$('.scrollpane').data('jsp') && this.$('.scrollpane').data('jsp').reinitialise();
+  },
+
+  _bindOrientationChange: function() {
+
+    var self = this;
+
+    var onOrientationChange = function() {
+      $(".cartodb-mobile .scrollpane").css("max-height", self.$el.height() - 30);
+      $('.cartodb-mobile .scrollpane').data('jsp') && $('.cartodb-mobile .scrollpane').data('jsp').reinitialise();
+    };
+
+    if (!window.addEventListener) {
+      window.attachEvent('orientationchange', onOrientationChange, this);
+    } else {
+      window.addEventListener('orientationchange', _.bind(onOrientationChange));
+    }
+
+  },
+
+  _renderOverlays: function() {
+
+    var hasSearchOverlay  = false;
+    var hasZoomOverlay    = false;
+    var hasLoaderOverlay  = false;
+    var hasLayerSelector  = false;
+
+    _.each(this.overlays, function(overlay) {
+
+      if (!this.visibility_options.search && overlay.type == 'search') {
+        if (this.visibility_options.search !== false && this.visibility_options.search !== "false") {
+          this._addSearch();
+          hasSearchOverlay = true;
+        }
+      }
+
+      if (!this.visibility_options.zoomControl && overlay.type === 'zoom') {
+        if (this.visibility_options.zoomControl !== "false") {
+          this._addZoom();
+          hasZoomOverlay = true;
+        }
+      }
+
+      if (!this.visibility_options.loaderControl && overlay.type === 'loader') {
+        if (this.visibility_options.loaderControl !== "false") {
+          this._addLoader();
+          hasLoaderOverlay = true;
+        }
+      }
+
+      if (overlay.type == 'fullscreen' && !this.mobileEnabled) {
+        this._addFullscreen();
+      }
+
+      if (overlay.type == 'header') {
+        this._addHeader(overlay);
+      }
+
+      if (overlay.type == 'layer_selector') {
+        hasLayerSelector = true;
+      }
+
+    }, this);
+
+    var search_visibility = this.visibility_options.search === true        || this.visibility_options.search === "true";
+    var zoom_visibility   = this.visibility_options.zoomControl === true   || this.visibility_options.zoomControl === "true";
+    var loader_visibility = this.visibility_options.loaderControl === true || this.visibility_options.loaderControl === "true";
+    var layer_selector_visibility  = this.visibility_options.layer_selector;
+
+    if (!hasSearchOverlay  && search_visibility) this._addSearch();
+    if (!hasZoomOverlay    && zoom_visibility)   this._addZoom();
+    if (!hasLoaderOverlay  && loader_visibility) this._addLoader();
+    if (layer_selector_visibility || hasLayerSelector && layer_selector_visibility == undefined) this.hasLayerSelector = true;
+
+  },
+
+  _initScrollPane: function() {
+
+    if (this.$scrollpane) return;
+
+    var self = this;
+
+    var height       = this.$el.height();
+    this.$scrollpane = this.$el.find(".scrollpane");
+
+    setTimeout(function() {
+      self.$scrollpane.css("max-height", height - 60);
+      self.$scrollpane.jScrollPane({ showArrows: true });
+    }, 500);
+
+  },
+
+  _addZoom: function() {
+
+    var template = cdb.core.Template.compile('\
+    <a href="#zoom_in" class="zoom_in">+</a>\
+    <a href="#zoom_out" class="zoom_out">-</a>\
+    <div class="info"></div>', 'mustache'
+    );
+
+    var zoom = new cdb.geo.ui.Zoom({
+      model: this.options.map,
+      template: template
+    });
+
+    this.$el.append(zoom.render().$el);
+    this.$el.addClass("with-zoom");
+
+  },
+
+  _addLoader: function() {
+
+    var template = cdb.core.Template.compile('<div class="loader"></div>', 'mustache');
+
+    this.loader = new cdb.geo.ui.TilesLoader({
+      template: template
+    });
+
+    this.$el.append(this.loader.render().$el);
+    this.$el.addClass("with-loader");
+
+  },
+
+  _addFullscreen: function() {
+
+    if (this.visibility_options.fullscreen != false) {
+      this.hasFullscreen = true;
+      this.$el.addClass("with-fullscreen");
+    }
+
+  },
+
+  _addSearch: function() {
+
+    this.hasSearch = true;
+
+    var template = cdb.core.Template.compile('\
+      <form>\
+      <span class="loader"></span>\
+      <input type="text" class="text" placeholder="Search for places..." value="" />\
+      <input type="submit" class="submit" value="" />\
+      </form>\
+      ', 'mustache'
+    );
+
+    var search = new cdb.geo.ui.Search({
+      template: template,
+      model: this.mapView.map
+    });
+
+    this.$el.find(".aside").prepend(search.render().$el);
+    this.$el.find(".cartodb-searchbox").show();
+    this.$el.addClass("with-search");
+
+  },
+
+  _addHeader: function(overlay) {
+
+    this.hasHeader = true;
+
+    this.$header = this.$el.find(".cartodb-header");
+
+    var title_template = _.template('<div class="hgroup"><% if (show_title) { %><div class="title"><%= title %></div><% } %><% if (show_description) { %><div class="description"><%= description %><% } %></div></div>');
+
+    var extra = overlay.options.extra;
+    var has_header = false;
+    var show_title = false, show_description = false;
+
+    if (extra) {
+
+      if (this.visibility_options.title || this.visibility_options.title != false && extra.show_title)      {
+        has_header = true;
+        show_title = true;
+      }
+
+      if (this.visibility_options.description || this.visibility_options.description != false && extra.show_description) {
+        has_header = true;
+        show_description = true;
+      }
+
+      if (this.slides) {
+        has_header = true;
+      }
+
+      var $hgroup = title_template({
+        title: cdb.core.sanitize.html(extra.title),
+        show_title:show_title,
+        description: cdb.core.sanitize.html(extra.description),
+        show_description: show_description
+      });
+
+      if (has_header) {
+        this.$el.addClass("with-header");
+        this.$header.find(".content").append($hgroup);
+      }
+
+    }
+
+  },
+
+  _addAttributions: function() {
+
+    var attributions = "";
+
+    this.options.mapView.$el.find(".leaflet-control-attribution").hide(); // TODO: remove this from here
+
+    if (this.options.layerView) {
+
+      attributions = this.options.layerView.model.get("attribution");
+      this.$el.find(".cartodb-attribution").append(attributions);
+
+    } else if (this.options.map.get("attribution")) {
+
+      attributions = this.options.map.get("attribution");
+
+      _.each(attributions, function(attribution) {
+        var $li = $("<li></li>");
+        var $el = $li.html(attribution);
+        this.$el.find(".cartodb-attribution").append($li);
+      }, this);
+
+    }
+
+    if (attributions) {
+      this.$el.find(".cartodb-attribution-button").fadeIn(250);
+    }
+
+  },
+
+  _renderLayers: function() {
+
+    var hasLegendOverlay = this.visibility_options.legends;
+
+    var legends = this.layers.filter(function(layer) {
+      return layer.get("legend") && layer.get("legend").type !== "none"
+    });
+
+    var hasLegends = legends.length ? true : false;
+
+    if (!this.hasLayerSelector && !hasLegendOverlay) return;
+    if (!this.hasLayerSelector && !hasLegends) return;
+    if (this.layers.length == 0) return;
+    if (this.layers.length == 1 && !hasLegends) return;
+
+    this.$el.addClass("with-layers");
+
+    this.model.set("layer_count", 0);
+
+    if (!this.hasSearch) this.$el.find(".aside .layer-container").prepend("<h3></h3>");
+
+    _.each(this.layers, this._renderLayer, this);
+
+  },
+
+  _renderLayer: function(data) {
+
+    var hasLegend = data.get("legend") && data.get("legend").type !== "" && data.get("legend").type !== "none";
+
+    // When the layer selector is disabled, don't show the layer if it doesn't have legends
+    if (!this.hasLayerSelector && !hasLegend) return;
+    if (!this.hasLayerSelector && !data.get("visible")) return;
+
+    var hide_toggle = (this.layers.length == 1 || !this.hasLayerSelector);
+
+    var show_legends = true;
+
+    if (this.visibility_options && this.visibility_options.legends !== undefined) {
+      show_legends = this.visibility_options.legends;
+    }
+
+    var layer = new cdb.geo.ui.MobileLayer({ 
+      model: data,
+      show_legends: show_legends,
+      show_title: !this.hasLayerSelector ? false : true,
+      hide_toggle: hide_toggle 
+    });
+
+    this.$el.find(".aside .layers").append(layer.render().$el);
+
+    layer.bind("change_visibility", this._reInitScrollpane, this);
+
+    this.model.set("layer_count", this.model.get("layer_count") + 1);
+
+  },
+
+  _renderTorque: function() {
+
+    if (this.options.torqueLayer) {
+
+      this.hasTorque = true;
+
+      this.slider = new cdb.geo.ui.TimeSlider({type: "time_slider", layer: this.options.torqueLayer, map: this.options.map, pos_margin: 0, position: "none" , width: "auto" });
+
+      this.slider.bind("time_clicked", function() {
+        this.slider.toggleTime();
+      }, this);
+
+      this.$el.find(".torque").append(this.slider.render().$el);
+
+      if (this.options.torqueLayer.hidden) this.slider.hide();
+      else this.$el.addClass("with-torque");
+    }
+
+  },
+
+  _renderSlidesController: function() {
+
+    if (this.slides) {
+
+      this.$el.addClass("with-slides");
+
+      this.slidesController = new cdb.geo.ui.SlidesController({
+        show_counter: true,
+        transitions: this.options.transitions,
+        visualization: this.options.visualization,
+        slides: this.slides
+      });
+
+      this.$el.append(this.slidesController.render().$el);
+
+    }
+
+  },
+
+  render: function() {
+
+    this._bindOrientationChange();
+
+    this.$el.html(this.template(this.options));
+
+    this.$header = this.$el.find(".cartodb-header");
+    this.$header.show();
+
+    this._renderOverlays();
+
+    this._renderSlidesController();
+
+    this._addAttributions();
+
+    this._getLayers();
+    this._renderLayers();
+    this._renderTorque();
+
+    return this;
+
+  }
+
 });
 /**
  * Show or hide tiles loader
@@ -26098,12 +32422,12 @@ cdb.geo.ui.Tooltip = cdb.geo.ui.InfoBox.extend({
   },
 
   render: function(data) {
-    this.$el.html( this.template(data) );
+    var sanitizedOutput = cdb.core.sanitize.html(this.template(data));
+    this.$el.html( sanitizedOutput );
     return this;
   }
 
 });
-
 /**
  *  FullScreen widget:
  *
@@ -26169,14 +32493,25 @@ cdb.ui.common.FullScreen = cdb.core.View.extend({
       docEl = $(this.options.doc)[0];
     }
 
-    var requestFullScreen = docEl.requestFullscreen || docEl.mozRequestFullScreen || docEl.webkitRequestFullScreen;
-    var cancelFullScreen  = doc.exitFullscreen || doc.mozCancelFullScreen || doc.webkitExitFullscreen;
+    var requestFullScreen = docEl.requestFullscreen || docEl.mozRequestFullScreen || docEl.webkitRequestFullScreen || docEl.msRequestFullscreen;
+    var cancelFullScreen = doc.exitFullscreen || doc.mozCancelFullScreen || doc.webkitExitFullscreen || doc.msExitFullscreen;
 
     var mapView = this.options.mapView;
 
-    if (!doc.fullscreenElement && !doc.mozFullScreenElement && !doc.webkitFullscreenElement) {
+    if (!doc.fullscreenElement && !doc.mozFullScreenElement && !doc.webkitFullscreenElement && !doc.msFullscreenElement) {
 
-      requestFullScreen.call(docEl);
+      if (docEl.webkitRequestFullScreen) {
+        // Cartodb.js #361 :: Full screen button not working on Safari 8.0.3 #361
+        // Safari has a bug that fullScreen doestn't work with Element.ALLOW_KEYBOARD_INPUT);
+        // Reference: Ehttp://stackoverflow.com/questions/8427413/webkitrequestfullscreen-fails-when-passing-element-allow-keyboard-input-in-safar
+        requestFullScreen.call(docEl, undefined);
+      } else {
+        // CartoDB.js #412 :: Fullscreen button is throwing errors
+        // Nowadays (2015/03/25), fullscreen is not supported in iOS Safari. Reference: http://caniuse.com/#feat=fullscreen
+        if (requestFullScreen) {
+          requestFullScreen.call(docEl);
+        }
+      }
 
       if (mapView) {
 
@@ -26206,6 +32541,7 @@ cdb.ui.common.FullScreen = cdb.core.View.extend({
 
 });
 
+
 function Map(options) {
   var self = this;
   this.options = _.defaults(options, {
@@ -26215,7 +32551,10 @@ function Map(options) {
     cors: this.isCORSSupported(),
     btoa: this.isBtoaSupported() ? this._encodeBase64Native : this._encodeBase64,
     MAX_GET_SIZE: 2033,
-    force_cors: false
+    force_cors: false,
+    instanciateCallback: function() {
+      return '_cdbc_' + self._callbackName();
+    }
   });
 
   this.layerToken = null;
@@ -26228,7 +32567,13 @@ function Map(options) {
   this._waiting = false;
   this.lastTimeUpdated = null;
   this._refreshTimer = -1;
+
+  // build template url
+  if (!this.options.maps_api_template) {
+    this._buildMapsApiTemplate(this.options);
+  }
 }
+
 
 Map.BASE_URL = '/api/v1/map';
 Map.EMPTY_GIF = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
@@ -26238,20 +32583,10 @@ function NamedMap(named_map, options) {
   Map.call(this, options);
   this.options.pngParams.push('auth_token')
   this.options.gridParams.push('auth_token')
-  this.endPoint = Map.BASE_URL + '/named/' + named_map.name;
-  this.JSONPendPoint = Map.BASE_URL + '/named/' + named_map.name + '/jsonp';
-  this.layers = _.clone(named_map.layers) || [];
-  for(var i = 0; i < this.layers.length; ++i) {
-    var layer = this.layers[i];
-    layer.options = layer.options || { hidden: false };
-    layer.options.layer_name = layer.layer_name;
-  }
-  this.named_map = named_map;
-  var token = named_map.auth_token || options.auth_token;
-  if (token) {
-    this.setAuthToken(token);
-  }
+  this.setLayerDefinition(named_map, options)
+  this.stat_tag = named_map.stat_tag;
 }
+
 
 function LayerDefinition(layerDefinition, options) {
   var self = this;
@@ -26295,6 +32630,13 @@ LayerDefinition.layerDefFromSubLayers = function(sublayers) {
 
 Map.prototype = {
 
+  _buildMapsApiTemplate: function(opts) {
+    opts.maps_api_template = opts.tiler_protocol +
+         "://" + ((opts.user_name) ? "{user}.":"")  +
+         opts.tiler_domain +
+         ((opts.tiler_port != "") ? (":" + opts.tiler_port) : "");
+  },
+
   /*
    * TODO: extract these two functions to some core module
    */
@@ -26307,11 +32649,15 @@ Map.prototype = {
   },
 
   getLayerCount: function() {
-    return this.layers.length;
+    return this.layers ? this.layers.length: 0;
   },
 
   _encodeBase64Native: function (input) {
     return btoa(input)
+  },
+
+  _callbackName: function() {
+    return cartodb.uniqueCallbackName(JSON.stringify(this.toJSON()));
   },
 
   // given number inside layergroup 
@@ -26509,18 +32855,19 @@ Map.prototype = {
     compressor(json, 3, function(encoded) {
       params.push(encoded);
       var loadingTime = cartodb.core.Profiler.metric('cartodb-js.layergroup.get.time').start();
+      var host = self.options.dynamic_cdn ? self._host(): self._tilerHost();
       ajax({
         dataType: 'jsonp',
-        url: self._tilerHost() + endPoint + '?' + params.join('&'),
+        url: host + endPoint + '?' + params.join('&'),
         jsonpCallback: self.options.instanciateCallback,
         cache: !!self.options.instanciateCallback,
         success: function(data) {
           loadingTime.end();
           if(0 === self._queue.length) {
             // check for errors
-            if (data.error) {
+            if (data.errors) {
               cartodb.core.Profiler.metric('cartodb-js.layergroup.get.error').inc();
-              callback(null, data.error);
+              callback(null, data);
             } else {
               callback(data);
             }
@@ -26540,6 +32887,28 @@ Map.prototype = {
           self._requestFinished();
         }
       });
+    });
+  },
+
+  // for named maps attributes are fetch from attributes service
+  fetchAttributes: function(layer_index, feature_id, columnNames, callback) {
+    this._attrCallbackName = this._attrCallbackName || this._callbackName();
+    var ajax = this.options.ajax;
+    var loadingTime = cartodb.core.Profiler.metric('cartodb-js.named_map.attributes.time').start();
+    ajax({
+      dataType: 'jsonp',
+      url: this._attributesUrl(layer_index, feature_id),
+      jsonpCallback: '_cdbi_layer_attributes_' + this._attrCallbackName,
+      cache: true,
+      success: function(data) {
+        loadingTime.end();
+        callback(data);
+      },
+      error: function(data) {
+        loadingTime.end();
+        cartodb.core.Profiler.metric('cartodb-js.named_map.attributes.error').inc();
+        callback(null);
+      }
     });
   },
 
@@ -26577,6 +32946,10 @@ Map.prototype = {
         params.push("auth_token=" + extra_params.auth_token);
       }
     }
+
+    if (this.stat_tag) {
+      params.push("stat_tag=" + this.stat_tag);
+    }
     // mark as the request is being done
     this._waiting = true;
     var req = null;
@@ -26596,8 +32969,8 @@ Map.prototype = {
       }
       // check payload size
       var payload = JSON.stringify(this.toJSON());
-      if (payload < this.options.MAX_GET_SIZE) {
-        return false;
+      if (payload.length > this.options.MAX_GET_SIZE) {
+        return true;
       }
     }
     return false;
@@ -26653,21 +33026,22 @@ Map.prototype = {
         self.urls = self._layerGroupTiles(data.layergroupid, self.options.extra_params);
         callback && callback(self.urls);
       } else {
-        if (self.visibleLayers().length === 0) {
+        if ((self.named_map !== null) && (err) ){
+          callback && callback(null, err);
+        } else if (self.visibleLayers().length === 0) {
           callback && callback({
             tiles: [Map.EMPTY_GIF],
             grids: []
           });
           return;
         } 
-        callback && callback(null, err);
       }
     });
     return this;
   },
 
   isHttps: function() {
-    return this.options.tiler_protocol === 'https';
+    return this.options.maps_api_template.indexOf('https') === 0;
   },
 
   _layerGroupTiles: function(layerGroupId, params) {
@@ -26791,30 +33165,42 @@ Map.prototype = {
     return url_params.join('&')
   },
 
+
   _tilerHost: function() {
     var opts = this.options;
-    return opts.tiler_protocol +
-         "://" + ((opts.user_name) ? opts.user_name+".":"")  +
-         opts.tiler_domain +
-         ((opts.tiler_port != "") ? (":" + opts.tiler_port) : "");
+    return opts.maps_api_template.replace('{user}', opts.user_name);
   },
 
   _host: function(subhost) {
+
     var opts = this.options;
-    if (opts.no_cdn) {
+    var cdn_host = opts.cdn_url;
+    var has_empty_cdn = !cdn_host || (cdn_host && (!cdn_host.http && !cdn_host.https));
+
+    if (opts.no_cdn || has_empty_cdn) {
       return this._tilerHost();
     } else {
-      var h = opts.tiler_protocol + "://";
+      var protocol = this.isHttps() ? 'https': 'http';
+      var h = protocol + "://";
       if (subhost) {
         h += subhost + ".";
       }
-      var cdn_host = opts.cdn_url || cdb.CDB_HOST;
-      if(!cdn_host.http && !cdn_host.https) {
-        throw new Error("cdn_host should contain http and/or https entries");
+
+      var cdn_url = cdn_host[protocol];
+      // build default template url if the cdn url is not templatized
+      // this is for backwards compatiblity, ideally we should use the url
+      // that tiler sends to us right away
+      if (!this._isUserTemplateUrl(cdn_url)) {
+        cdn_url = cdn_url  + "/{user}";
       }
-      h += cdn_host[opts.tiler_protocol] + "/" + opts.user_name;
+      h += cdn_url.replace('{user}', opts.user_name)
+
       return h;
     }
+  },
+
+  _isUserTemplateUrl: function(t) {
+    return t && t.indexOf('{user}') !== -1;
   },
 
   getTooltipData: function(layer) {
@@ -26876,6 +33262,39 @@ Map.prototype = {
 };
 
 NamedMap.prototype = _.extend({}, Map.prototype, {
+
+  getSubLayer: function(index) {
+    var layer = this.layers[index];
+    // for named maps we don't know how many layers are defined so 
+    // we create the layer on the fly
+    if (!layer) {
+      layer = this.layers[index] = {
+        options: {}
+      };
+    }
+    layer.sub = layer.sub || new SubLayer(this, index);
+    return layer.sub;
+  },
+
+  setLayerDefinition: function(named_map, options) {
+    options = options || {}
+    this.endPoint = Map.BASE_URL + '/named/' + named_map.name;
+    this.JSONPendPoint = Map.BASE_URL + '/named/' + named_map.name + '/jsonp';
+    this.layers = _.clone(named_map.layers) || [];
+    for(var i = 0; i < this.layers.length; ++i) {
+      var layer = this.layers[i];
+      layer.options = layer.options || { hidden: false };
+      layer.options.layer_name = layer.layer_name;
+    }
+    this.named_map = named_map;
+    var token = named_map.auth_token || options.auth_token;
+    if (token) {
+      this.setAuthToken(token);
+    }
+    if(!options.silent) {
+      this.invalidate();
+    }
+  },
 
   setAuthToken: function(token) {
     if(!this.isHttps()) {
@@ -26942,8 +33361,9 @@ NamedMap.prototype = _.extend({}, Map.prototype, {
 
   _attributesUrl: function(layer, feature_id) {
     // /api/maps/:map_id/:layer_index/attributes/:feature_id
+    var host = this._host();
     var url = [
-      this._tilerHost(),
+      host,
       //'api',
       //'v1',
       Map.BASE_URL.slice(1),
@@ -26968,24 +33388,6 @@ NamedMap.prototype = _.extend({}, Map.prototype, {
     return url;
   },
 
-  // for named maps attributes are fetch from attributes service
-  fetchAttributes: function(layer_index, feature_id, columnNames, callback) {
-    var ajax = this.options.ajax;
-    var loadingTime = cartodb.core.Profiler.metric('cartodb-js.named_map.attributes.time').start();
-    ajax({
-      dataType: 'jsonp',
-      url: this._attributesUrl(layer_index, feature_id),
-      success: function(data) {
-        loadingTime.end()
-        callback(data);
-      },
-      error: function(data) {
-        loadingTime.end()
-        cartodb.core.Profiler.metric('cartodb-js.named_map.attributes.error').inc();
-        callback(null);
-      }
-    });
-  },
 
   setSQL: function(sql) {
     throw new Error("SQL is read-only in NamedMaps");
@@ -27058,15 +33460,41 @@ LayerDefinition.prototype = _.extend({}, Map.prototype, {
     var layers = this.visibleLayers();
     for(var i = 0; i < layers.length; ++i) {
       var layer = layers[i];
-      obj.layers.push({
+      var layer_def = {
         type: 'cartodb',
         options: {
           sql: layer.options.sql,
           cartocss: layer.options.cartocss,
           cartocss_version: layer.options.cartocss_version || '2.1.0',
-          interactivity: this._cleanInteractivity(layer.options.interactivity)
         }
-      });
+      };
+
+      if (layer.options.interactivity) {
+        function fields(f) {
+          var n = []
+          for(var i = 0; i < f.length; ++i) {
+            n.push(f[i].name);
+          }
+          return n;
+        }
+        layer_def.options.interactivity = this._cleanInteractivity(layer.options.interactivity);
+        var infowindow = this.getInfowindowData(this.getLayerNumberByIndex(i));
+        var attrs = layer.options.attributes ? this._cleanInteractivity(this.options.attributes):(infowindow && fields(infowindow.fields));
+        if (attrs) {
+          layer_def.options.attributes = {
+             id: 'cartodb_id',
+             columns: attrs
+          }
+        }
+      }
+
+      if (layer.options.raster) {
+        layer_def.options.geom_column = "the_raster_webmercator";
+        layer_def.options.geom_type = "raster";
+        // raster needs 2.3.0 to work
+        layer_def.options.cartocss_version = layer.options.cartocss_version || '2.3.0';
+      }
+      obj.layers.push(layer_def);
     }
     return obj;
   },
@@ -27175,56 +33603,21 @@ LayerDefinition.prototype = _.extend({}, Map.prototype, {
     return this.getSubLayer(this.getLayerCount() - 1);
   },
 
-  _getSqlApi: function(attrs) {
-    attrs = attrs || {};
-    var port = attrs.sql_api_port
-    var domain = attrs.sql_api_domain + (port ? ':' + port: '')
-    var protocol = attrs.sql_api_protocol;
-    var version = 'v1';
-    if (domain.indexOf('cartodb.com') !== -1) {
-      //protocol = 'http';
-      domain = "cartodb.com";
-      version = 'v2';
-    }
+  _attributesUrl: function(layer, feature_id) {
+    // /api/maps/:map_id/:layer_index/attributes/:feature_id
+    var host = this._host();
+    var url = [
+      host,
+      //'api',
+      //'v1',
+      Map.BASE_URL.slice(1),
+      this.layerToken,
+      this.getLayerIndexByNumber(layer),
+      'attributes',
+      feature_id].join('/');
 
-    var sql = new cartodb.SQL({
-      user: attrs.user_name,
-      protocol: protocol,
-      host: domain,
-      version: version
-    });
-
-    return sql;
+    return url;
   },
-
-  fetchAttributes: function(layer_index, feature_id, columnNames, callback) {
-    var layer = this.getLayer(layer_index);
-    var sql = this._getSqlApi(this.options);
-
-    // prepare columns with double quotes
-    columnNames = _.map(columnNames, function(n) {
-      return "\"" + n + "\"";
-    }).join(',');
-
-    var loadingTime = cartodb.core.Profiler.metric('cartodb-js.layergroup.attributes.time').start();
-    // execute the sql
-    sql.execute('select {{{ fields }}} from ({{{ sql }}}) as _cartodbjs_alias where cartodb_id = {{{ cartodb_id }}}', {
-      fields: columnNames,
-      cartodb_id: feature_id,
-      sql: layer.options.sql
-    }).done(function(interact_data) {
-      loadingTime.end();
-      if (interact_data.rows.length === 0 ) {
-        callback(null);
-        return;
-      }
-      callback(interact_data.rows[0]);
-    }).error(function() {
-      loadingTime.end();
-      cartodb.core.Profiler.metric('cartodb-js.layergroup.attributes.error').inc();
-      callback(null);
-    });
-  }
 
 
 });
@@ -27235,7 +33628,7 @@ function SubLayer(_parent, position) {
   this._position = position;
   this._added = true;
   this._bindInteraction();
-  if (Backbone.Model) {
+  if (Backbone.Model && this._parent.getLayer(this._position)) {
     this.infowindow = new Backbone.Model(this._parent.getLayer(this._position).infowindow);
     this.infowindow.bind('change', function() {
       var def = this._parent.getLayer(this._position);
@@ -27252,6 +33645,12 @@ SubLayer.prototype = {
     this._parent.removeLayer(this._position);
     this._unbindInteraction();
     this._added = false;
+    this.trigger('remove', this);
+  },
+
+  toggle: function() {
+    this.get('hidden') ? this.show() : this.hide();
+    return !this.get('hidden');
   },
 
   show: function() {
@@ -27314,6 +33713,9 @@ SubLayer.prototype = {
       attrs[i] = new_attrs[i];
     }
     this._parent.setLayer(this._position, def);
+    if (new_attrs.hidden !== undefined) {
+      this.trigger('change:visibility', this, new_attrs.hidden);
+    }
     return this;
   },
 
@@ -27362,11 +33764,48 @@ SubLayer.prototype = {
 // give events capabilitues
 _.extend(SubLayer.prototype, Backbone.Events);
 
+/** utility methods to calculate hash */
+cartodb._makeCRCTable = function() {
+    var c;
+    var crcTable = [];
+    for(var n = 0; n < 256; ++n){
+        c = n;
+        for(var k = 0; k < 8; ++k){
+            c = ((c&1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1));
+        }
+        crcTable[n] = c;
+    }
+    return crcTable;
+}
+
+cartodb.crc32 = function(str) {
+    var crcTable = cartodb._crcTable || (cartodb._crcTable = cartodb._makeCRCTable());
+    var crc = 0 ^ (-1);
+
+    for (var i = 0, l = str.length; i < l; ++i ) {
+        crc = (crc >>> 8) ^ crcTable[(crc ^ str.charCodeAt(i)) & 0xFF];
+    }
+
+    return (crc ^ (-1)) >>> 0;
+};
+
+cartodb.uniqueCallbackName = function(str) {
+  cartodb._callback_c = cartodb._callback_c || 0;
+  ++cartodb._callback_c;
+  return cartodb.crc32(str) + "_" + cartodb._callback_c;
+};
+
+
+
+
 /*
  *  common functions for cartodb connector
  */
 
 function CartoDBLayerCommon() {
+
+  this.visible = true;
+
 }
 
 CartoDBLayerCommon.prototype = {
@@ -27377,6 +33816,7 @@ CartoDBLayerCommon.prototype = {
     this.setOpacity(this.options.previous_opacity === undefined ? 0.99: this.options.previous_opacity);
     delete this.options.previous_opacity;
     this._interactionDisabled = false;
+    this.visible = true;
   },
 
   hide: function() {
@@ -27386,6 +33826,14 @@ CartoDBLayerCommon.prototype = {
     this.setOpacity(0);
     // disable here interaction for all the layers
     this._interactionDisabled = true;
+    this.visible = false;
+  },
+
+  toggle: function() {
+
+    this.isVisible() ? this.hide() : this.show();
+
+    return this.isVisible();
   },
 
   /**
@@ -27521,7 +33969,8 @@ CartoDBLayerCommon.prototype = {
 
   _clearInteraction: function() {
     for(var i in this.interactionEnabled) {
-      if(this.interactionEnabled[i]) {
+      if (this.interactionEnabled.hasOwnProperty(i) &&
+        this.interactionEnabled[i]) {
         this.setInteraction(i, false);
       }
     }
@@ -27529,9 +33978,10 @@ CartoDBLayerCommon.prototype = {
 
   _reloadInteraction: function() {
     for(var i in this.interactionEnabled) {
-      if(this.interactionEnabled[i]) {
-        this.setInteraction(i, false);
-        this.setInteraction(i, true);
+      if (this.interactionEnabled.hasOwnProperty(i) &&
+        this.interactionEnabled[i]) {
+          this.setInteraction(i, false);
+          this.setInteraction(i, true);
       }
     }
   },
@@ -27628,6 +34078,7 @@ cdb.geo.common.CartoDBLogo = {
   }
 };
 
+
 (function() {
   /**
   * base layer for all leaflet layers
@@ -27637,7 +34088,8 @@ cdb.geo.common.CartoDBLogo = {
     this.leafletMap = leafletMap;
     this.model = layerModel;
 
-    this.model.bind('change', this._modelUpdated, this);
+    this.setModel(layerModel);
+
     this.type = layerModel.get('type') || layerModel.get('kind');
     this.type = this.type.toLowerCase();
   };
@@ -27645,11 +34097,20 @@ cdb.geo.common.CartoDBLogo = {
   _.extend(LeafLetLayerView.prototype, Backbone.Events);
   _.extend(LeafLetLayerView.prototype, {
 
+    setModel: function(model) {
+      if (this.model) {
+        this.model.unbind('change', this._modelUpdated, this);
+      }
+      this.model = model;
+      this.model.bind('change', this._modelUpdated, this);
+    },
+
     /**
     * remove layer from the map and unbind events
     */
     remove: function() {
       this.leafletMap.removeLayer(this.leafletLayer);
+      this.trigger('remove', this);
       this.model.unbind(null, null, this);
       this.unbind();
     },
@@ -27716,7 +34177,12 @@ var LeafLetPlainLayerView = L.Class.extend({
       var st = 'transparent url(' + this.model.get('image') + ') repeat center center';
       div.style.background = st
     }
+  },
+
+  // this method
+  setZIndex: function() {
   }
+
 });
 
 _.extend(LeafLetPlainLayerView.prototype, cdb.geo.LeafLetLayerView.prototype);
@@ -27735,7 +34201,7 @@ var LeafLetTiledLayerView = L.TileLayer.extend({
     L.TileLayer.prototype.initialize.call(this, layerModel.get('urlTemplate'), {
       tms:          layerModel.get('tms'),
       attribution:  layerModel.get('attribution'),
-      minZoom:      layerModel.get('minZomm'),
+      minZoom:      layerModel.get('minZoom'),
       maxZoom:      layerModel.get('maxZoom'),
       subdomains:   layerModel.get('subdomains') || 'abc',
       errorTileUrl: layerModel.get('errorTileUrl'),
@@ -27761,6 +34227,69 @@ _.extend(LeafLetTiledLayerView.prototype, cdb.geo.LeafLetLayerView.prototype, {
 });
 
 cdb.geo.LeafLetTiledLayerView = LeafLetTiledLayerView;
+
+})();
+
+(function() {
+
+  if(typeof(L) == "undefined")
+    return;
+
+  var stamenSubstitute = function stamenSubstitute(type) {
+    return {
+      url: 'http://{s}.basemaps.cartocdn.com/'+ type +'_all/{z}/{x}/{y}.png',
+      subdomains: 'abcd',
+      minZoom: 0,
+      maxZoom: 18,
+      attribution: 'Map designs by <a href="http://stamen.com/">Stamen</a>. Data by <a href="http://openstreetmap.org">OpenStreetMap</a>, Provided by <a href="http://cartodb.com">CartoDB</a>'
+    };
+  };
+  
+  var nokiaSubstitute = function nokiaSubstitute(type) {
+    return {
+      url: 'https://{s}.maps.nlp.nokia.com/maptile/2.1/maptile/newest/'+ type +'.day/{z}/{x}/{y}/256/png8?lg=eng&token=A7tBPacePg9Mj_zghvKt9Q&app_id=KuYppsdXZznpffJsKT24',
+      subdomains: '1234',
+      minZoom: 0,
+      maxZoom: 21,
+      attribution: '©2012 Nokia <a href="http://here.net/services/terms" target="_blank">Terms of use</a>'
+    };
+  };
+
+  var substitutes = {
+    roadmap: nokiaSubstitute('normal'),
+    gray_roadmap: stamenSubstitute('light'),
+    dark_roadmap: stamenSubstitute('dark'),
+    hybrid: nokiaSubstitute('hybrid'),
+    terrain: nokiaSubstitute('terrain'),
+    satellite: nokiaSubstitute('satellite')
+  };
+
+  var LeafLetGmapsTiledLayerView = L.TileLayer.extend({
+    initialize: function(layerModel, leafletMap) {
+      var substitute = substitutes[layerModel.get('base_type')];
+      L.TileLayer.prototype.initialize.call(this, substitute.url, {
+        tms:          false,
+        attribution:  substitute.attribution,
+        minZoom:      substitute.minZoom,
+        maxZoom:      substitute.maxZoom,
+        subdomains:   substitute.subdomains,
+        errorTileUrl: '',
+        opacity:      1
+      });
+      cdb.geo.LeafLetLayerView.call(this, layerModel, this, leafletMap);
+    }
+
+  });
+
+  _.extend(LeafLetGmapsTiledLayerView.prototype, cdb.geo.LeafLetLayerView.prototype, {
+
+    _modelUpdated: function() {
+      throw new Error("A GMaps baselayer should never be updated");
+    }
+
+  });
+
+  cdb.geo.LeafLetGmapsTiledLayerView = LeafLetGmapsTiledLayerView;
 
 })();
 
@@ -28018,11 +34547,16 @@ L.CartoDBGroupLayerBase = L.TileLayer.extend({
    * @param {Event} Wax event
    */
   _manageOnEvents: function(map, o) {
-    var layer_point = this._findPos(map,o),
-        latlng = map.layerPointToLatLng(layer_point);
+    var layer_point = this._findPos(map,o);
+
+    if (!layer_point || isNaN(layer_point.x) || isNaN(layer_point.y)) {
+      // If layer_point doesn't contain x and y,
+      // we can't calculate event map position
+      return false;
+    }
+
+    var latlng = map.layerPointToLatLng(layer_point);
     var event_type = o.e.type.toLowerCase();
-
-
     var screenPos = map.layerPointToContainerPoint(layer_point);
 
     switch (event_type) {
@@ -28034,7 +34568,10 @@ L.CartoDBGroupLayerBase = L.TileLayer.extend({
 
       case 'click':
       case 'touchend':
+      case 'touchmove': // for some reason android browser does not send touchend
       case 'mspointerup':
+      case 'pointerup':
+      case 'pointermove':
         if (this.options.featureClick) {
           this.options.featureClick(o.e,latlng, screenPos, o.data, o.layer);
         }
@@ -28082,8 +34619,8 @@ L.CartoDBGroupLayerBase = L.TileLayer.extend({
     } else {
       var rect = obj.getBoundingClientRect();
       var p = new L.Point(
-            o.e.clientX - rect.left - obj.clientLeft - window.scrollX,
-            o.e.clientY - rect.top - obj.clientTop - window.scrollY);
+            (o.e.clientX? o.e.clientX: x) - rect.left - obj.clientLeft - window.scrollX,
+            (o.e.clientY? o.e.clientY: y) - rect.top - obj.clientTop - window.scrollY);
       return map.containerPointToLayerPoint(p);
     }
   }
@@ -28093,7 +34630,11 @@ L.CartoDBGroupLayerBase = L.TileLayer.extend({
 L.CartoDBGroupLayer = L.CartoDBGroupLayerBase.extend({
   includes: [
     LayerDefinition.prototype,
-  ]
+  ],
+
+  _modelUpdated: function() {
+    this.setLayerDefinition(this.model.get('layer_definition'));
+  }
 });
 
 function layerView(base) {
@@ -28161,6 +34702,7 @@ function layerView(base) {
         self.featureClick  && self.featureClick.apply(self, arguments);
       }, 10);
 
+
       base.prototype.initialize.call(this, opts);
       cdb.geo.LeafLetLayerView.call(this, layerModel, this, leafletMap);
 
@@ -28181,7 +34723,7 @@ function layerView(base) {
     },
 
     error: function(e) {
-      this.trigger('error', e ? e.errors : 'unknown error');
+      this.trigger('error', e ? (e.errors || e) : 'unknown error');
       this.model.trigger('error', e?e.errors:'unknown error');
     },
 
@@ -28215,10 +34757,6 @@ L.NamedMap = L.CartoDBGroupLayerBase.extend({
         throw new Error('cartodb-leaflet needs at least the named_map');
     }
 
-    /*if(!options.layer_definition) {
-      this.options.layer_definition = LayerDefinition.layerDefFromSubLayers(options.sublayers);
-    }*/
-
     NamedMap.call(this, this.options.named_map, this.options);
 
     this.fire = this.trigger;
@@ -28227,6 +34765,10 @@ L.NamedMap = L.CartoDBGroupLayerBase.extend({
     L.TileLayer.prototype.initialize.call(this);
     this.interaction = [];
     this.addProfiling();
+  },
+
+  _modelUpdated: function() {
+    this.setLayerDefinition(this.model.get('named_map'));
   }
 });
 
@@ -28445,8 +34987,8 @@ cdb.geo.LeafLetLayerCartoDBView = LeafLetLayerCartoDBView;
         // remove the "powered by leaflet"
         this.map_leaflet.attributionControl.setPrefix('');
 
-        // Disable the scrollwheel
         if (this.map.get("scrollwheel") == false) this.map_leaflet.scrollWheelZoom.disable();
+        if (this.map.get("keyboard") == false) this.map_leaflet.keyboard.disable();
 
       } else {
 
@@ -28505,6 +35047,11 @@ cdb.geo.LeafLetLayerCartoDBView = LeafLetLayerCartoDBView;
         self._setModelProperty({ center: [c.lat, c.lng] });
       });
 
+      this.map_leaflet.on('dragend', function() {
+        var c = self.map_leaflet.getCenter();
+        this.trigger('dragend', [c.lat, c.lng]);
+      }, this);
+
       this.map_leaflet.on('drag', function() {
         var c = self.map_leaflet.getCenter();
         self._setModelProperty({
@@ -28531,6 +35078,49 @@ cdb.geo.LeafLetLayerCartoDBView = LeafLetLayerCartoDBView;
       }
     },
 
+    // this replaces the default functionality to search for
+    // already added views so they are not replaced
+    _addLayers: function() {
+      var self = this;
+
+      var oldLayers = this.layers;
+      this.layers = {};
+
+      function findLayerView(layer) {
+        var lv = _.find(oldLayers, function(layer_view) {
+          var m = layer_view.model;
+          return m.isEqual(layer);
+        });
+        return lv;
+      }
+
+      function canReused(layer) {
+        return self.map.layers.find(function(m) {
+          return m.isEqual(layer);
+        });
+      }
+
+      // remove all
+      for(var layer in oldLayers) {
+        var layer_view = oldLayers[layer];
+        if (!canReused(layer_view.model)) {
+          layer_view.remove();
+        }
+      }
+
+      this.map.layers.each(function(lyr) {
+        var lv = findLayerView(lyr);
+        if (!lv) {
+          self._addLayer(lyr);
+        } else {
+          lv.setModel(lyr);
+          self.layers[lyr.cid] = lv;
+          self.trigger('newLayerView', lv, lv.model, self);
+        }
+      });
+
+    },
+
     clean: function() {
       //see https://github.com/CloudMade/Leaflet/issues/1101
       L.DomEvent.off(window, 'resize', this.map_leaflet._onResize, this.map_leaflet);
@@ -28544,6 +35134,14 @@ cdb.geo.LeafLetLayerCartoDBView = LeafLetLayerCartoDBView;
 
       // do not change by elder
       cdb.core.View.prototype.clean.call(this);
+    },
+
+    _setKeyboard: function(model, z) {
+      if (z) {
+        this.map_leaflet.keyboard.enable();
+      } else {
+        this.map_leaflet.keyboard.disable();
+      }
     },
 
     _setScrollWheel: function(model, z) {
@@ -28583,40 +35181,23 @@ cdb.geo.LeafLetLayerCartoDBView = LeafLetLayerCartoDBView;
     _addLayer: function(layer, layers, opts) {
       var self = this;
       var lyr, layer_view;
-
       layer_view = cdb.geo.LeafletMapView.createLayer(layer, this.map_leaflet);
-      if(!layer_view) {
+      if (!layer_view) {
         return;
       }
+      return this._addLayerToMap(layer_view, opts);
+    },
 
-      var appending = !opts || opts.index === undefined || opts.index === _.size(this.layers);
-      // since leaflet does not support layer ordering
-      // add the layers should be removed and added again
-      // if the layer is being appended do not clear
-      if(!appending) {
-        for(var i in this.layers) {
-          this.map_leaflet.removeLayer(this.layers[i]);
-        }
-      }
+    _addLayerToMap: function(layer_view, opts) {
+      var layer = layer_view.model;
 
       this.layers[layer.cid] = layer_view;
+      cdb.geo.LeafletMapView.addLayerToMap(layer_view, this.map_leaflet);
 
-      // add them again, in correct order
-      if(appending) {
-        cdb.geo.LeafletMapView.addLayerToMap(layer_view, self.map_leaflet);
-        if(layer_view.setZIndex) {
-          layer_view.setZIndex(layer.get('order'))
-        }
-      } else {
-        this.map.layers.each(function(layerModel) {
-          var v = self.layers[layerModel.cid];
-          if(v) {
-            cdb.geo.LeafletMapView.addLayerToMap(v, self.map_leaflet);
-            if(v.setZIndex) {
-              v.setZIndex(layerModel.get('order'))
-            }
-          }
-        });
+      // reorder layers
+      for(var i in this.layers) {
+        var lv = this.layers[i];
+        lv.setZIndex(lv.model.get('order'));
       }
 
       var attribution = layer.get('attribution');
@@ -28631,10 +35212,15 @@ cdb.geo.LeafLetLayerCartoDBView = LeafLetLayerCartoDBView;
         this.map.set({ attribution: attributions });
       }
 
-      if(opts == undefined || !opts.silent) {
-        this.trigger('newLayerView', layer_view, layer, this);
+      if(opts === undefined || !opts.silent) {
+        this.trigger('newLayerView', layer_view, layer_view.model, this);
       }
       return layer_view;
+    },
+
+    pixelToLatLon: function(pos) {
+      var point = this.map_leaflet.containerPointToLatLng([pos[0], pos[1]]);
+      return point;
     },
 
     latLonToPixel: function(latlon) {
@@ -28692,8 +35278,10 @@ cdb.geo.LeafLetLayerCartoDBView = LeafLetLayerCartoDBView;
       "cartodb": cdb.geo.LeafLetLayerCartoDBView,
       "carto": cdb.geo.LeafLetLayerCartoDBView,
       "plain": cdb.geo.LeafLetPlainLayerView,
-      // for google maps create a plain layer
-      "gmapsbase": cdb.geo.LeafLetPlainLayerView,
+
+      // Substitutes the GMaps baselayer w/ an equivalent Leaflet tiled layer, since not supporting Gmaps anymore
+      "gmapsbase": cdb.geo.LeafLetGmapsTiledLayerView,
+
       "layergroup": cdb.geo.LeafLetCartoDBLayerGroupView,
       "namedmap": cdb.geo.LeafLetCartoDBNamedMapView,
       "torque": function(layer, map) {
@@ -28720,8 +35308,8 @@ cdb.geo.LeafLetLayerCartoDBView = LeafLetLayerCartoDBView;
     addLayerToMap: function(layer_view, map, pos) {
       map.addLayer(layer_view.leafletLayer);
       if(pos !== undefined) {
-        if(v.setZIndex) {
-          v.setZIndex(pos);
+        if (layer_view.setZIndex) {
+          layer_view.setZIndex(pos);
         }
       }
     },
@@ -29204,7 +35792,7 @@ CartoDBLayerGroupBase.prototype._findPos = function (map,o) {
   var obj = map.getDiv();
 
   var x, y;
-  if (o.e.changedTouches && o.e.changedTouches.length > 0) {
+  if (o.e.changedTouches && o.e.changedTouches.length > 0 && (o.e.changedTouches[0] !== undefined) ) {
     x = o.e.changedTouches[0].clientX + window.scrollX;
     y = o.e.changedTouches[0].clientY + window.scrollY;
   } else {
@@ -29244,7 +35832,10 @@ CartoDBLayerGroupBase.prototype._manageOnEvents = function(map,o) {
 
     case 'click':
     case 'touchend':
+    case 'touchmove': // for some reason android browser does not send touchend
     case 'mspointerup':
+    case 'pointerup':
+    case 'pointermove':
       if (this.options.featureClick) {
         this.options.featureClick(o.e,latlng, point, o.data, o.layer);
       }
@@ -29691,6 +36282,11 @@ if(typeof(google) != "undefined" && typeof(google.maps) != "undefined") {
         self.trigger('click', e, [e.latLng.lat(), e.latLng.lng()]);
       });
 
+      google.maps.event.addListener(this.map_googlemaps, 'dragend', function(e) {
+        var c = self.map_googlemaps.getCenter();
+        self.trigger('dragend', e, [c.lat(), c.lng()]);
+      });
+
       google.maps.event.addListener(this.map_googlemaps, 'dblclick', function(e) {
         self.trigger('dblclick', e);
       });
@@ -29710,6 +36306,10 @@ if(typeof(google) != "undefined" && typeof(google.maps) != "undefined") {
       this.projector.draw = function() {};
       this.trigger('ready');
       this._isReady = true;
+    },
+
+    _setKeyboard: function(model, z) {
+      this.map_googlemaps.setOptions({ keyboardShortcuts: z });
     },
 
     _setScrollWheel: function(model, z) {
@@ -29752,12 +36352,17 @@ if(typeof(google) != "undefined" && typeof(google.maps) != "undefined") {
       if (!layer_view) {
         return;
       }
+      return this._addLayerToMap(layer_view, opts);
+    },
+
+    _addLayerToMap: function(layer_view, opts) {
+      var layer = layer_view.model;
 
       this.layers[layer.cid] = layer_view;
 
       if (layer_view) {
         var idx = _(this.layers).filter(function(lyr) { return !!lyr.getTile; }).length - 1;
-        var isBaseLayer = _.keys(this.layers).length === 1 || (opts && opts.index === 0);
+        var isBaseLayer = _.keys(this.layers).length === 1 || (opts && opts.index === 0) || layer.get('order') === 0;
         // set base layer
         if(isBaseLayer && !opts.no_base_layer) {
           var m = layer_view.model;
@@ -29774,9 +36379,9 @@ if(typeof(google) != "undefined" && typeof(google.maps) != "undefined") {
             if (!layer_view.gmapsLayer) {
               cdb.log.error("gmaps layer can't be null");
             }
-            self.map_googlemaps.overlayMapTypes.setAt(idx, layer_view.gmapsLayer);
+            this.map_googlemaps.overlayMapTypes.setAt(idx, layer_view.gmapsLayer);
           } else {
-            layer_view.gmapsLayer.setMap(self.map_googlemaps);
+            layer_view.gmapsLayer.setMap(this.map_googlemaps);
           }
         }
         if(opts === undefined || !opts.silent) {
@@ -29803,6 +36408,9 @@ if(typeof(google) != "undefined" && typeof(google.maps) != "undefined") {
 
     },
 
+    pixelToLatLon: function(pos) {
+      return this.projector.fromContainerPixelToLatLng(new google.maps.Point(pos[0], pos[1]));
+    },
 
     latLonToPixel: function(latlon) {
       return this.projector.latLngToPixel(new google.maps.LatLng(latlon[0], latlon[1]));
@@ -30208,8 +36816,8 @@ cdb.ui.common.ShareDialog = cdb.ui.common.Dialog.extend({
 
     var $el = this.$el;
 
-    var title             = this.options.title;
-    var description       = this.options.description;
+    var title             = cdb.core.sanitize.html(this.options.title);
+    var description       = cdb.core.sanitize.html(this.options.description);
     var clean_description = this._stripHTML(this.options.description);
     var share_url         = this.options.share_url;
 
@@ -30967,6 +37575,7 @@ var Overlay = {
     }
 
     data.options = typeof data.options === 'string' ? JSON.parse(data.options): data.options;
+    data.options = data.options || {}
     var widget = t(data, vis);
 
     if (widget) {
@@ -30979,6 +37588,11 @@ var Overlay = {
 };
 
 cdb.vis.Overlay = Overlay;
+
+cdb.vis.Overlays = Backbone.Collection.extend({
+  comparator: function() {
+  }
+});
 
 // layer factory
 var Layers = {
@@ -31020,80 +37634,11 @@ var Layers = {
 
 cdb.vis.Layers = Layers;
 
-var Loader = cdb.vis.Loader = {
-
-  queue: [],
-  current: undefined,
-  _script: null,
-  head: null,
-
-  loadScript: function(src) {
-      var script = document.createElement('script');
-      script.type = 'text/javascript';
-      script.src = src;
-      script.async = true;
-      if (!Loader.head) {
-        Loader.head = document.getElementsByTagName('head')[0];
-      }
-      // defer the loading because IE9 loads in the same frame the script
-      // so Loader._script is null
-      setTimeout(function() {
-        Loader.head.appendChild(script);
-      }, 0);
-      return script;
-  },
-
-  get: function(url, callback) {
-    if (!Loader._script) {
-      Loader.current = callback;
-      Loader._script = Loader.loadScript(url + (~url.indexOf('?') ? '&' : '?') + 'callback=vizjson');
-    } else {
-      Loader.queue.push([url, callback]);
-    }
-  },
-
-  getPath: function(file) {
-    var scripts = document.getElementsByTagName('script'),
-        cartodbJsRe = /\/?cartodb[\-\._]?([\w\-\._]*)\.js\??/;
-    for (i = 0, len = scripts.length; i < len; i++) {
-      src = scripts[i].src;
-      matches = src.match(cartodbJsRe);
-
-      if (matches) {
-        var bits = src.split('/');
-        delete bits[bits.length - 1];
-        return bits.join('/') + file;
-      }
-    }
-    return null;
-  },
-
-  loadModule: function(modName) {
-    var file = "cartodb.mod." + modName + (cartodb.DEBUG ? ".uncompressed.js" : ".js");
-    var src = this.getPath(file);
-    if (!src) {
-      cartodb.log.error("can't find cartodb.js file");
-    }
-    Loader.loadScript(src);
-  }
-};
-
-window.vizjson = function(data) {
-  Loader.current && Loader.current(data);
-  // remove script
-  Loader.head.removeChild(Loader._script);
-  Loader._script = null;
-  // next element
-  var a = Loader.queue.shift();
-  if (a) {
-    Loader.get(a[0], a[1]);
-  }
-};
-
 cartodb.moduleLoad = function(name, mod) {
   cartodb[name] = mod;
   cartodb.config.modules.add({
-    name: mod
+    name: name,
+    mod: mod
   });
 };
 
@@ -31148,39 +37693,175 @@ var Vis = cdb.core.View.extend({
         done();
       }
     }
-    
+
     cdb.config.bind('moduleLoaded', loaded);
     _.defer(loaded);
   },
 
+  _addLegends: function(legends) {
+    if (this.legends) {
+      this.legends.remove();
+    }
+
+    this.legends = new cdb.geo.ui.StackedLegend({
+      legends: legends
+    });
+
+    if (!this.mobile_enabled) {
+      this.mapView.addOverlay(this.legends);
+    }
+  },
+
+  addLegends: function(layers) {
+    this._addLegends(this.createLegendView(layers));
+  },
+
+  _setLayerOptions: function(options) {
+
+    var layers = [];
+
+    // flatten layers (except baselayer)
+    var layers = _.map(this.getLayers().slice(1), function(layer) {
+      if (layer.getSubLayers) {
+        return layer.getSubLayers();
+      }
+      return layer;
+    });
+
+    layers = _.flatten(layers);
+
+    for (i = 0; i < Math.min(options.sublayer_options.length, layers.length); ++i) {
+
+      var o = options.sublayer_options[i];
+      var subLayer = layers[i];
+      var legend = this.legends && this.legends.getLegendByIndex(i);
+
+      if (legend) {
+        legend[o.visible ? 'show': 'hide']();
+      }
+
+      // HACK
+      if(subLayer.model && subLayer.model.get('type') === 'torque') {
+        if (o.visible === false) {
+          subLayer.model.set('visible', false);
+          if (this.timeSlider) {
+            this.timeSlider.hide();
+          }
+        }
+      } else {
+        if (o.visible === false) subLayer.hide();
+      }
+    }
+  },
+
+  _addOverlays: function(overlays, data, options) {
+
+    overlays = overlays.toJSON();
+    // Sort the overlays by its internal order
+    overlays = _.sortBy(overlays, function(overlay) {
+      return overlay.order === null ? Number.MAX_VALUE: overlay.order;
+    });
+
+    // clean current overlays
+    while (this.overlays.length !== 0) {
+      this.overlays.pop().clean();
+    }
+
+    this._createOverlays(overlays, data, options);
+  },
+
+  addTimeSlider: function(torqueLayer) {
+    // if a timeslides already exists don't create it again
+    if (torqueLayer && (torqueLayer.options.steps > 1) && !this.timeSlider) {
+      var self = this;
+      // dont use add overlay since this overlay is managed by torque layer
+      var timeSlider = Overlay.create('time_slider', this, { layer: torqueLayer });
+      this.mapView.addOverlay(timeSlider);
+      this.timeSlider = timeSlider;
+      // remove when layer is done
+      torqueLayer.bind('remove', function _remove() {
+        self.timeSlider = null;
+        timeSlider.remove();
+        torqueLayer.unbind('remove', _remove);
+      });
+    }
+  },
+
+  _setupSublayers: function(layers, options) {
+
+    options.sublayer_options = [];
+
+    _.each(layers.slice(1), function(lyr) {
+
+      if (lyr.type === 'layergroup') {
+        _.each(lyr.options.layer_definition.layers, function(l) {
+          options.sublayer_options.push({ visible: ( l.visible !== undefined ? l.visible : true ) })
+        });
+      } else if (lyr.type === 'namedmap') {
+        _.each(lyr.options.named_map.layers, function(l) {
+          options.sublayer_options.push({ visible: ( l.visible !== undefined ? l.visible : true ) })
+        });
+      } else if (lyr.type === 'torque') {
+        options.sublayer_options.push({ visible: ( lyr.options.visible !== undefined ? lyr.options.visible : true ) })
+      }
+
+    });
+
+  },
 
   load: function(data, options) {
     var self = this;
+
     if (typeof(data) === 'string') {
+
       var url = data;
-      cdb.vis.Loader.get(url, function(data) {
+
+      cdb.core.Loader.get(url, function(data) {
         if (data) {
           self.load(data, options);
         } else {
           self.throwError('error fetching viz.json file');
         }
       });
+
       return this;
+
     }
 
-    if(!this.checkModules(data.layers)) {
-      if(this.moduleChecked) {
+    // if the viz.json contains slides, discard the main viz.json and use the slides
+    var slides = data.slides;
+    if (slides && slides.length > 0) {
+      data = slides[0]
+      data.slides = slides.slice(1);
+    }
+
+    // load modules needed for layers
+    var layers = data.layers;
+
+    // check if there are slides and check all the layers
+    if (data.slides && data.slides.length > 0) {
+      layers = layers.concat(_.flatten(data.slides.map(function(s) { return s.layers })));
+    }
+
+    if (!this.checkModules(layers)) {
+
+      if (this.moduleChecked) {
+
         self.throwError("modules couldn't be loaded");
         return this;
+
       }
+
       this.moduleChecked = true;
-      // load modules needed for layers
-      this.loadModules(data.layers, function() {
+
+
+      this.loadModules(layers, function() {
         self.load(data, options);
       });
-      return this;
-    }
 
+      return this;
+
+    }
 
     // configure the vis in http or https
     if (window && window.location.protocol && window.location.protocol === 'https:') {
@@ -31200,14 +37881,40 @@ var Vis = cdb.core.View.extend({
 
     this.cartodb_logo = (options.cartodb_logo !== undefined) ? options.cartodb_logo: has_logo_overlay;
 
-    // We set the logo by default
-    if (!has_logo_overlay && options.cartodb_logo === undefined) this.cartodb_logo = true;
+    if (this.mobile) this.cartodb_logo = false;
+    else if (!has_logo_overlay && options.cartodb_logo === undefined) this.cartodb_logo = true; // We set the logo by default
 
-    var scrollwheel   = (options.scrollwheel === undefined)  ? data.scrollwheel : options.scrollwheel;
+    var scrollwheel       = (options.scrollwheel === undefined)  ? data.scrollwheel : options.scrollwheel;
+    var slides_controller = (options.slides_controller === undefined)  ? data.slides_controller : options.slides_controller;
 
     // map
     data.maxZoom || (data.maxZoom = 20);
     data.minZoom || (data.minZoom = 0);
+
+    //Force using GMaps ?
+    if ( (this.gmaps_base_type) && (data.map_provider === "leaflet") ) {
+
+      //Check if base_type is correct
+      var typesAllowed = ['roadmap', 'gray_roadmap', 'dark_roadmap', 'hybrid', 'satellite', 'terrain'];
+      if (_.contains(typesAllowed, this.gmaps_base_type)) {
+        if (data.layers) {
+          data.layers[0].options.type = 'GMapsBase';
+          data.layers[0].options.base_type = this.gmaps_base_type;
+          data.layers[0].options.name = this.gmaps_base_type;
+
+          if (this.gmaps_style) {
+            data.layers[0].options.style = typeof this.gmaps_style === 'string' ? JSON.parse(this.gmaps_style): this.gmaps_style;
+          }
+
+          data.map_provider = 'googlemaps';
+          data.layers[0].options.attribution = ''; //GMaps has its own attribution
+        } else {
+          cdb.log.error('No base map loaded. Using Leaflet.');
+        }
+      } else {
+        cdb.log.error('GMaps base_type "' + this.gmaps_base_type + ' is not supported. Using leaflet.');
+      }
+    }
 
     var mapConfig = {
       title: data.title,
@@ -31221,24 +37928,32 @@ var Vis = cdb.core.View.extend({
 
     // if the boundaries are defined, we add them to the map
     if (data.bounding_box_sw && data.bounding_box_ne) {
+
       mapConfig.bounding_box_sw = data.bounding_box_sw;
       mapConfig.bounding_box_ne = data.bounding_box_ne;
+
     }
+
     if (data.bounds) {
+
       mapConfig.view_bounds_sw = data.bounds[0];
       mapConfig.view_bounds_ne = data.bounds[1];
+
     } else {
       var center = data.center;
+
       if (typeof(center) === "string") {
         center = $.parseJSON(center);
       }
+
       mapConfig.center = center || [0, 0];
-      mapConfig.zoom = data.zoom == undefined ? 4: data.zoom;
+      mapConfig.zoom = data.zoom === undefined ? 4: data.zoom;
     }
 
+    var map = new cdb.geo.Map(mapConfig);
+    this.map = map;
+    this.overlayModels = new Backbone.Collection();
 
-    var map         = new cdb.geo.Map(mapConfig);
-    this.map        = map;
     this.updated_at = data.updated_at || new Date().getTime();
 
     // If a CartoDB embed map is hidden by default, its
@@ -31259,9 +37974,10 @@ var Vis = cdb.core.View.extend({
       width: '100%',
       height: '100%'
     });
+
     this.container = div;
 
-    // Another div to prevent leaflet grabs the div
+    // Another div to prevent leaflet grabbing the div
     var div_hack = $('<div>')
       .addClass("cartodb-map-wrapper")
       .css({
@@ -31274,214 +37990,425 @@ var Vis = cdb.core.View.extend({
       });
 
     div.append(div_hack);
+
     this.$el.append(div);
 
     // Create the map
     var mapView  = new cdb.geo.MapView.create(div_hack, map);
+
     this.mapView = mapView;
 
-    // Add layers
-    for(var i in data.layers) {
-      var layerData = data.layers[i];
-      this.loadLayer(layerData, options);
+    if (options.legends || (options.legends === undefined && this.map.get("legends") !== false)) {
+      map.layers.bind('reset', this.addLegends, this);
     }
 
-    var torqueLayer;
-    var device = /Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    this.overlayModels.bind('reset', function(overlays) {
+      this._addOverlays(overlays, data, options);
+      this._addMobile(data, options);
+    }, this);
 
-    if (device) {
-      $(".cartodb-map-wrapper").addClass("device");
+    this.mapView.bind('newLayerView', this._addLoading, this);
+
+    if (options.time_slider) {
+      this.mapView.bind('newLayerView', this._addTimeSlider, this);
     }
 
-    if (options.legends || (options.legends === undefined && this.map.get("legends") !== false))  {
-
-      if (!device) {
-
-        this.addLegends(data.layers);
-
-      } else {
-
-        this.legends = new cdb.geo.ui.StackedLegend({
-          legends: this.createLegendView(data.layers)
-        });
-
-      }
-
+    if (this.infowindow) {
+      this.mapView.bind('newLayerView', this.addInfowindow, this);
     }
 
-  if (options.time_slider) {
-      // add time slider
-      var torque = _(this.getLayers()).filter(function(layer) { return layer.model.get('type') === 'torque'; })
-      if (torque.length) {
-        torqueLayer = torque[0];
-
-        if (!device && torque.length) {
-          this.addTimeSlider(torqueLayer);
-        }
-
-      }
+    if (this.tooltip) {
+      this.mapView.bind('newLayerView', this.addTooltip, this);
     }
 
+    this.map.layers.reset(_.map(data.layers, function(layerData) {
+      return Layers.create(layerData.type || layerData.kind, self, layerData);
+    }));
+
+    this.overlayModels.reset(data.overlays);
+
+    // if there are no sublayer_options fill it
     if (!options.sublayer_options) {
-      options.sublayer_options = [];
-      _.each(data.layers.slice(1), function(lyr) {
-         if (lyr.type === 'layergroup') {
-          _.each(lyr.options.layer_definition.layers, function(l) {
-            options.sublayer_options.push({ visible: ( l.visible !== undefined ? l.visible : true ) })
-          });
-         } else if (lyr.type === 'namedmap') {
-          _.each(lyr.options.named_map.layers, function(l) {
-            options.sublayer_options.push({ visible: ( l.visible !== undefined ? l.visible : true ) })
-          });
-         }
-      });
+      this._setupSublayers(data.layers, options);
     }
 
-    if (device) this.addMobile(torqueLayer);
+    this._setLayerOptions(options);
 
-    // set layer options
-    if (options.sublayer_options) {
+    if (data.slides) {
 
-      var layers = [];
-      // flatten layers (except baselayer)
-      var layers = _.map(this.getLayers().slice(1), function(layer) {
-          if (layer.getSubLayers) {
-            return layer.getSubLayers();
-          }
-          return layer;
-      });
-      layers = _.flatten(layers);
+      this.map.disableKeyboard();
 
-      for(i = 0; i < Math.min(options.sublayer_options.length, layers.length); ++i) {
-        var o = options.sublayer_options[i];
-        var subLayer = layers[i];
-        var legend = this.legends && this.legends.getLegendByIndex(i);
-        if(legend) {
-          legend[o.visible ? 'show': 'hide']();
-        }
-        // HACK
-        if(subLayer.model && subLayer.model.get('type') === 'torque') {
-          if (o.visible === false) {
-            subLayer.model.set('visible', false);
-            var timeSlider = this.getOverlay('time_slider');
-            if (timeSlider) {
-              timeSlider.hide();
-            }
-          }
-        } else {
-          if (o.visible === false) subLayer.hide();
-        }
+      function odysseyLoaded() {
+        self._createSlides([data].concat(data.slides));
+      };
+
+      if (cartodb.odyssey === undefined) {
+        cdb.config.bind('moduleLoaded:odyssey', odysseyLoaded);
+        Loader.loadModule('odyssey');
+      } else {
+        odysseyLoaded();
       }
+
     }
-
-    // Sort the overlays by its internal order
-    var overlays = _.sortBy(data.overlays, function(overlay){ return overlay.order == null ? 1000 : overlay.order; });
-
-    this._createOverlays(overlays, options);
-
-    //var fullscreenEnabled = document.fullscreenEnabled || document.mozFullScreenEnabled || document.webkitFullscreenEnabled;
-    //if (options.fullscreen && fullscreenEnabled && !device) this.addFullScreen();
 
     _.defer(function() {
       self.trigger('done', self, self.getLayers());
     })
 
     return this;
+
   },
 
-  _createOverlays: function(overlays, options) {
+  _addTimeSlider: function() {
+    var self = this;
+    var torque = _(this.getLayers()).find(function(layer) {
+      return layer.model.get('type') === 'torque';
+    });
+    if (torque) {
+      this.torqueLayer = torque;
+      // send step events from torque layer
+      this.torqueLayer.bind('change:time', function(s) {
+        this.trigger('change:step', this.torqueLayer, this.torqueLayer.getStep());
+      }, this);
+      if (!this.mobile_enabled && this.torqueLayer) {
+        this.addTimeSlider(this.torqueLayer);
+      }
+    }
+  },
 
-    _.each(overlays, function(data) {
+  // sets the animation step if there is an animation
+  // returns true if succed
+  setAnimationStep: function(s, opt) {
+    if (this.torqueLayer) {
+      this.torqueLayer.setStep(s, opt);
+      return true;
+    }
+    return false;
+  },
 
-      var type    = data.type;
-      var overlay = this.addOverlay(data);
+  _createSlides: function(slides) {
 
+      function BackboneActions(model) {
+        var actions = {
+          set: function() {
+            var args = arguments;
+            return O.Action({
+              enter: function() {
+                model.set.apply(model, args);
+              }
+            });
+          },
+
+          reset: function() {
+            var args = arguments;
+            return O.Action({
+              enter: function() {
+                model.reset.apply(model, args);
+              }
+            });
+          }
+        };
+        return actions;
+      }
+
+      function SetStepAction(vis, step) {
+        return O.Action(function() {
+          vis.setAnimationStep(step);
+        });
+      }
+
+      function AnimationTrigger(vis, step) {
+        var t = O.Trigger();
+        vis.on('change:step', function (layer, currentStep) {
+          if (currentStep === step) {
+            t.trigger();
+          }
+        });
+        return t;
+      }
+
+      function PrevTrigger(seq, step) {
+        var t = O.Trigger();
+        var c = PrevTrigger._callbacks;
+        if (!c) {
+          c = PrevTrigger._callbacks = []
+          O.Keys().left().then(function() {
+            for (var i = 0; i < c.length; ++i) {
+              if (c[i] === seq.current()) {
+                t.trigger();
+                return;
+              }
+            }
+          });
+        }
+        c.push(step);
+        return t;
+      }
+
+      function NextTrigger(seq, step) {
+        var t = O.Trigger();
+        var c = NextTrigger._callbacks;
+        if (!c) {
+          c = NextTrigger._callbacks = []
+          O.Keys().right().then(function() {
+            for (var i = 0; i < c.length; ++i) {
+              if (c[i] === seq.current()) {
+                t.trigger();
+                return;
+              }
+            }
+          });
+        }
+        c.push(step);
+        return t;
+      }
+
+      function WaitAction(seq, ms) {
+        return O.Step(O.Sleep(ms), O.Action(function() {
+          seq.next();
+        }));
+      }
+
+      var self = this;
+
+      var seq = this.sequence = O.Sequential();
+      this.slides = O.Story();
+
+      // transition - debug, remove
+      //O.Keys().left().then(seq.prev, seq);
+      //O.Keys().right().then(seq.next, seq);
+
+      this.map.actions = BackboneActions(this.map);
+      this.map.layers.actions = BackboneActions(this.map.layers);
+      this.overlayModels.actions = BackboneActions(this.overlayModels)
+
+      function goTo(seq, i) {
+        return function() {
+          seq.current(i);
+        }
+      }
+
+      for (var i = 0; i < slides.length; ++i) {
+        var slide = slides[i];
+        var states = [];
+
+        var mapChanges = O.Step(
+          // map movement
+          this.map.actions.set({
+            'center': typeof slide.center === 'string' ? JSON.parse(slide.center): slide.center,
+            'zoom': slide.zoom
+          }),
+          // wait a little bit
+          O.Sleep(350),
+          // layer change
+          this.map.layers.actions.reset(_.map(slide.layers, function(layerData) {
+            return Layers.create(layerData.type || layerData.kind, self, layerData);
+          }))
+        );
+
+        states.push(mapChanges);
+
+        // overlays
+        states.push(this.overlayModels.actions.reset(slide.overlays));
+
+        if (slide.transition_options) {
+          var to = slide.transition_options;
+          if (to.transition_trigger === 'time') {
+            states.push(WaitAction(seq, to.time * 1000));
+          } else { //default is click
+            NextTrigger(seq, i).then(seq.next, seq);
+            PrevTrigger(seq, i).then(seq.prev, seq);
+          }
+        }
+
+        this.slides.addState(
+          seq.step(i),
+          O.Parallel.apply(window, states)
+        );
+
+      }
+      this.slides.go(0);
+  },
+
+  _createOverlays: function(overlays, vis_data, options) {
+
+    // if there's no header overlay, we need to explicitly create the slide controller
+    if ((options["slides_controller"] || options["slides_controller"] === undefined) && !this.mobile_enabled && !_.find(overlays, function(o) { return o.type === 'header' && o.options.display; })) {
+      this._addSlideController(vis_data);
+    }
+
+    _(overlays).each(function(data) {
+      var type = data.type;
+
+      // We don't render certain overlays if we are in mobile
+      if (this.mobile_enabled && (type === "zoom" || type === "header" || type === "loader")) return;
+
+      // IE<10 doesn't support the Fullscreen API
+      if (type === 'fullscreen' && $.browser.msie && parseFloat($.browser.version) <= 10) return;
+
+      // Decide to create or not the custom overlays
+      if (type === 'image' || type === 'text' || type === 'annotation') {
+        var isDevice = data.options.device == "mobile" ? true : false;
+        if (this.mobile !== isDevice) return;
+        if (!options[type] && options[type] !== undefined) {
+          return;
+        }
+      }
+
+      // We add the header overlay
+      if (type === 'header') {
+        var overlay = this._addHeader(data, vis_data);
+      } else {
+        var overlay = this.addOverlay(data);
+      }
+
+      // We show/hide the overlays
       if (overlay && (type in options) && options[type] === false) overlay.hide();
 
       var opt = data.options;
 
-      if (type == 'share'                   && options["shareable"] || type == 'share' && overlay.model.get("display") && options["shareable"] == undefined) overlay.show();
-      if (type == 'layer_selector'          && options[type] || type == 'layer_selector' && overlay.model.get("display") && options[type] == undefined) overlay.show();
-      if (type == 'fullscreen'              && options[type] || type == 'fullscreen' && overlay.model.get("display") && options[type] == undefined) overlay.show();
-      if (!this.device && (type == 'search' && options[type] || type == 'search' && opt.display && options[type] == undefined)) overlay.show();
+      if (!this.mobile_enabled) {
 
-      if (type === 'header') {
+        if (type == 'share' && options["shareable"]  || type == 'share' && overlay.model.get("display") && options["shareable"] == undefined) overlay.show();
+        if (type == 'layer_selector' && options[type] || type == 'layer_selector' && overlay.model.get("display") && options[type] == undefined) overlay.show();
+        if (type == 'fullscreen' && options[type] || type == 'fullscreen' && overlay.model.get("display") && options[type] == undefined) overlay.show();
+        if (type == 'search' && options[type] || type == 'search' && opt.display && options[type] == undefined) overlay.show();
 
-        var m = overlay.model;
+        if (type === 'header') {
 
-        if (options.title !== undefined) {
-          m.set("show_title", options.title);
+          var m = overlay.model;
+
+          if (options.title !== undefined) {
+            m.set("show_title", options.title);
+          }
+
+          if (options.description !== undefined) {
+            m.set("show_description", options.description);
+          }
+
+          if (m.get('show_title') || m.get('show_description')) {
+            $(".cartodb-map-wrapper").addClass("with_header");
+          }
+
+          overlay.render();
         }
-
-        if (options.description !== undefined) {
-          m.set("show_description", options.description);
-        }
-
-        if (m.get('show_title') || m.get('show_description')) {
-          $(".cartodb-map-wrapper").addClass("with_header");
-        }
-
-        overlay.render()
       }
+
 
     }, this);
 
   },
 
-  addMobile: function(torqueLayer) {
+  _addSlideController: function(data) {
 
-    this.addOverlay({
-      type: 'mobile',
-      torqueLayer: torqueLayer,
-      legends: this.legends
-    });
+    if (data.slides && data.slides.length > 0) {
 
-  },
+      var transitions = [data.transition_options].concat(_.pluck(data.slides, "transition_options"));
 
-  addTimeSlider: function(torqueLayer) {
-    if (torqueLayer) {
-      this.addOverlay({
-        type: 'time_slider',
-        layer: torqueLayer
+      return this.addOverlay({
+        type: 'slides_controller',
+        transitions: transitions
       });
     }
+
   },
 
-   createLegendView: function(layers) {
-    var legends = [];
-    for(var i = layers.length - 1; i>= 0; --i) {
-      var layer = layers[i];
-      if(layer.legend) {
-        layer.legend.data = layer.legend.items;
-        var legend = layer.legend;
+  _addHeader: function(data, vis_data) {
 
-        if((legend.items && legend.items.length) || legend.template) {
-          layer.legend.index = i;
-          legends.push(new cdb.geo.ui.Legend(layer.legend));
-        }
-      }
-      if(layer.options && layer.options.layer_definition) {
-        legends = legends.concat(this.createLegendView(layer.options.layer_definition.layers));
-      } else if(layer.options && layer.options.named_map && layer.options.named_map.layers) {
-        legends = legends.concat(this.createLegendView(layer.options.named_map.layers));
-      }
-    }
-    return legends;
-  },
+    var transitions = [vis_data.transition_options].concat(_.pluck(vis_data.slides, "transition_options"))
 
-  addLegends: function(layers) {
-
-    var legends = this.createLegendView(layers);
-    this.legends = new cdb.geo.ui.StackedLegend({
-       legends: legends
+    return this.addOverlay({
+      type: 'header',
+      options: data.options,
+      transitions: transitions
     });
 
-    this.mapView.addOverlay(this.legends);
+  },
 
+  _addMobile: function(data, options) {
+
+    var layers;
+    var layer = data.layers[1];
+
+    if (this.mobile_enabled) {
+
+      if (options && options.legends === undefined) {
+        options.legends = this.legends ? true : false;
+      }
+
+      if (layer.options && layer.options.layer_definition) {
+        layers = layer.options.layer_definition.layers;
+      } else if (layer.options && layer.options.named_map && layer.options.named_map.layers) {
+        layers = layer.options.named_map.layers;
+      }
+
+      var transitions = [data.transition_options].concat(_.pluck(data.slides, "transition_options"));
+
+      this.mobileOverlay = this.addOverlay({
+        type: 'mobile',
+        layers: layers,
+        slides: data.slides,
+        transitions:transitions,
+        overlays: data.overlays,
+        options: options,
+        torqueLayer: this.torqueLayer
+      });
+
+    }
+
+  },
+
+  _createLegendView: function(layer, layerView) {
+    if (layer.legend) {
+      layer.legend.data = layer.legend.items;
+      var legend = layer.legend;
+
+      if ((legend.items && legend.items.length) || legend.template) {
+        var view = new cdb.geo.ui.Legend(layer.legend);
+        layerView.bind('change:visibility', function(layer, hidden) {
+          view[hidden? 'hide': 'show']();
+        });
+        return view;
+      }
+    }
+    return null;
+  },
+
+  createLegendView: function(layers) {
+    var legends = [];
+    var self = this;
+    for (var i = layers.length - 1; i >= 0; --i) {
+      var cid = layers.at(i).cid;
+      var layer = layers.at(i).attributes
+      var layerView = this.mapView.getLayerByCid(cid);
+      legends.push(this._createLayerLegendView(layer, layerView));
+    }
+    return _.flatten(legends);
+  },
+
+  _createLayerLegendView: function(layer, layerView) {
+    var self = this;
+    var legends = [];
+    if (layer.options && layer.options.layer_definition) {
+      var sublayers = layer.options.layer_definition.layers;
+      _(sublayers).each(function(sub, i) {
+        legends.push(self._createLegendView(sub, layerView.getSubLayer(i)));
+      });
+    } else if(layer.options && layer.options.named_map && layer.options.named_map.layers) {
+      var sublayers = layer.options.named_map.layers;
+      _(sublayers).each(function(sub, i) {
+        legends.push(self._createLegendView(sub, layerView.getSubLayer(i)));
+      });
+    } else {
+      legends.push(this._createLegendView(layer, layerView))
+    }
+    return _.compact(legends).reverse();
   },
 
   addOverlay: function(overlay) {
+
     overlay.map = this.map;
+
     var v = Overlay.create(overlay.type, this, overlay);
 
     if (v) {
@@ -31503,12 +38430,6 @@ var Vis = cdb.core.View.extend({
           }
         }
       }, this);
-
-      // Set map position correctly taking into account
-      // header height
-      if (overlay.type == "header") {
-        //this.setMapPosition();
-      }
     }
     return v;
   },
@@ -31517,15 +38438,8 @@ var Vis = cdb.core.View.extend({
   _applyOptions: function(vizjson, opt) {
     opt = opt || {};
     opt = _.defaults(opt, {
-      //search: false,
-      //title: false,
-      //description: false,
-      //layer_selector: false,
-      //legends: true,
       tiles_loader: true,
-      zoomControl: true,
       loaderControl: true,
-      searchControl: false,
       infowindow: true,
       tooltip: true,
       time_slider: true
@@ -31553,13 +38467,24 @@ var Vis = cdb.core.View.extend({
     }
 
     this.infowindow = opt.infowindow;
-    this.tooltip = opt.tooltip;
+    this.tooltip    = opt.tooltip;
 
-    if(opt.https) {
+    if (opt.https) {
       this.https = true;
     }
 
-    var device = this.device = /Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    if (opt.gmaps_base_type) {
+      this.gmaps_base_type = opt.gmaps_base_type;
+    }
+
+    if (opt.gmaps_style) {
+      this.gmaps_style = opt.gmaps_style;
+    }
+
+    this.mobile = /Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+    this.mobile_enabled = (opt.mobile_layout && this.mobile) || opt.force_mobile;
+
+    if (opt.force_mobile === false || opt.force_mobile === "false") this.mobile_enabled = false;
 
     if (!opt.title) {
       vizjson.title = null;
@@ -31577,10 +38502,15 @@ var Vis = cdb.core.View.extend({
       remove_overlay('loader');
     }
 
-    if (!this.device && (opt.search || opt.searchControl)) {
+    if (opt.searchControl !== undefined) {
+      opt.search = opt.searchControl;
+    }
+
+    if (!this.mobile_enabled && opt.search) {
       if (!search_overlay('search')) {
         vizjson.overlays.push({
-           type: "search"
+           type: "search",
+           order: 3
         });
       }
     }
@@ -31604,7 +38534,7 @@ var Vis = cdb.core.View.extend({
         });
       }
     }
- 
+
 
     if (opt.layer_selector) {
       if (!search_overlay('layer_selector')) {
@@ -31614,21 +38544,28 @@ var Vis = cdb.core.View.extend({
       }
     }
 
-    if (opt.shareable && !device) {
+    if (opt.shareable && !this.mobile_enabled) {
       if (!search_overlay('share')) {
         vizjson.overlays.push({
           type: "share",
+          order: 2,
           url: vizjson.url
         });
       }
     }
 
     // We remove certain overlays in mobile devices
-    if (device) {
+    if (this.mobile_enabled) {
+      remove_overlay('logo');
       remove_overlay('share');
-      remove_overlay('layer_selector');
-      remove_overlay('fullscreen');
+    }
+
+    if (this.mobile || ((opt.zoomControl !== undefined) && (!opt.zoomControl)) ){
       remove_overlay('zoom');
+    }
+
+    if (this.mobile || ((opt.search !== undefined) && (!opt.search)) ){
+      remove_overlay('search');
     }
 
     // if bounds are present zoom and center will not taken into account
@@ -31667,12 +38604,20 @@ var Vis = cdb.core.View.extend({
 
     if (vizjson.layers.length > 1) {
       var token = opt.auth_token;
-      for(var i = 1; i < vizjson.layers.length; ++i) {
-        var o = vizjson.layers[i].options;
-        o.no_cdn = opt.no_cdn;
-        o.force_cors = opt.force_cors;
-        if(token) {
-          o.auth_token = token;
+      function _applyLayerOptions(layers) {
+        for(var i = 1; i < layers.length; ++i) {
+          var o = layers[i].options;
+          o.no_cdn = opt.no_cdn;
+          o.force_cors = opt.force_cors;
+          if(token) {
+            o.auth_token = token;
+          }
+        }
+      }
+      _applyLayerOptions(vizjson.layers);
+      if (vizjson.slides) {
+        for(var i = 0; i < vizjson.slides.length; ++i) {
+          _applyLayerOptions(vizjson.slides[i].layers);
         }
       }
     }
@@ -31728,6 +38673,9 @@ var Vis = cdb.core.View.extend({
           });
           layerView.tooltip = tooltip;
           this.mapView.addOverlay(tooltip);
+          layerView.bind('remove', function() {
+            this.tooltip.clean();
+          });
         }
         layerView.setInteraction(i, true);
       }
@@ -31814,6 +38762,7 @@ var Vis = cdb.core.View.extend({
             'template': infowindowFields.template,
             'template_type': infowindowFields.template_type,
             'alternative_names': infowindowFields.alternative_names,
+            'sanitizeTemplate': infowindowFields.sanitizeTemplate,
             'offset': extra.offset,
             'width': extra.width,
             'maxHeight': extra.maxHeight
@@ -31853,50 +38802,31 @@ var Vis = cdb.core.View.extend({
     layerView.infowindow = infowindow.model;
   },
 
-  loadLayer: function(layerData, opts) {
-    var map = this.map;
-    var mapView = this.mapView;
-    //layerData.type = layerData.kind;
-    var layer_cid = map.addLayer(Layers.create(layerData.type || layerData.kind, this, layerData), opts);
-
-    var layerView = mapView.getLayerByCid(layer_cid);
-
-    if (!layerView) {
-      this.throwError("layer can't be created", map.layers.getByCid(layer_cid));
-      return;
-    }
-
-    // add the associated overlays
-    if(layerView && this.infowindow && layerView.containInfowindow && layerView.containInfowindow()) {
-      this.addInfowindow(layerView);
-    }
-
-    if(layerView && this.tooltip && layerView.containTooltip && layerView.containTooltip()) {
-      this.addTooltip(layerView);
-    }
-
+  _addLoading: function (layerView) {
     if (layerView) {
       var self = this;
 
       var loadingTiles = function() {
-        self.loadingTiles(opts);
+        self.loadingTiles();
       };
 
       var loadTiles = function() {
-        self.loadTiles(opts);
+        self.loadTiles();
       };
 
       layerView.bind('loading', loadingTiles);
       layerView.bind('load',    loadTiles);
     }
-
-    return layerView;
-
   },
 
+
   loadingTiles: function() {
+
+    if (this.mobileOverlay) {
+      this.mobileOverlay.loadingTiles();
+    }
+
     if (this.loader) {
-      //this.$el.find(".cartodb-fullscreen").hide();
       this.loader.show()
     }
     if(this.layersLoading === 0) {
@@ -31906,9 +38836,13 @@ var Vis = cdb.core.View.extend({
   },
 
   loadTiles: function() {
+
+    if (this.mobileOverlay) {
+      this.mobileOverlay.loadTiles();
+    }
+
     if (this.loader) {
       this.loader.hide();
-      //this.$el.find(".cartodb-fullscreen").fadeIn(150);
     }
     this.layersLoading--;
     // check less than 0 because loading event sometimes is
@@ -31961,28 +38895,40 @@ var Vis = cdb.core.View.extend({
     });
   },
 
+  getOverlaysByType: function(type) {
+    return _(this.overlays).filter(function(v) {
+      return v.type == type;
+    });
+  },
+
   _onResize: function() {
+
     $(window).unbind('resize', this._onResize);
+
     var self = this;
+
     self.mapView.invalidateSize();
 
     // This timeout is necessary due to GMaps needs time
     // to load tiles and recalculate its bounds :S
     setTimeout(function() {
 
-      //self.setMapPosition();
-      
       var c = self.mapConfig;
+
       if (c.view_bounds_sw) {
+
         self.mapView.map.setBounds([
           c.view_bounds_sw,
           c.view_bounds_ne
         ]);
+
       } else {
+
         self.mapView.map.set({
           center: c.center,
           zoom: c.zoom
         });
+
       }
     }, 150);
   }
@@ -32031,7 +38977,7 @@ var Vis = cdb.core.View.extend({
     });
 
     map.viz.mapView.addInfowindow(infowindow);
-    // try to change interactivity, it the layer is a named map 
+    // try to change interactivity, it the layer is a named map
     // it's inmutable so it'a assumed the interactivity already has
     // the fields it needs
     try {
@@ -32125,28 +39071,606 @@ cdb.vis.Vis = Vis;
 })();
 (function() {
 
+  Queue = function() {
+
+    // callback storage
+    this._methods = [];
+
+    // reference to the response
+    this._response = null;
+
+    // all queues start off unflushed
+    this._flushed = false;
+
+  };
+
+  Queue.prototype = {
+
+    // adds callbacks to the queue
+    add: function(fn) {
+
+      // if the queue had been flushed, return immediately
+      if (this._flushed) {
+
+        // otherwise push it on the queue
+        fn(this._response);
+
+      } else {
+        this._methods.push(fn);
+      }
+
+    },
+
+    flush: function(resp) {
+
+      // flush only ever happens once
+      if (this._flushed) {
+        return;
+      }
+
+      // store the response for subsequent calls after flush()
+      this._response = resp;
+
+      // mark that it's been flushed
+      this._flushed = true;
+
+      // shift 'em out and call 'em back
+      while (this._methods[0]) {
+        this._methods.shift()(resp);
+      }
+
+    }
+
+  };
+
+  StaticImage = function() {
+
+    Map.call(this, this); 
+
+    this.imageOptions = {};
+
+    this.error = null;
+
+    this.supported_formats = ["png", "jpg"];
+
+    this.defaults = {
+      basemap_url_template: "http://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}.png",
+      basemap_subdomains: ["a", "b", "c"],
+      format: "png",
+      zoom: 10,
+      center: [0, 0],
+      size:  [320, 240],
+      tiler_port: 80,
+      tiler_domain: "cartodb.com"
+    };
+
+  };
+
+  StaticImage.prototype = _.extend({}, Map.prototype, {
+
+    load: function(vizjson, options) {
+
+      _.bindAll(this, "_onVisLoaded");
+
+      this.queue = new Queue;
+
+      this.no_cdn = options.no_cdn;
+
+      this.userOptions = options;
+
+      options = _.defaults({ vizjson: vizjson, temp_id: "s" + this._getUUID() }, this.defaults);
+
+      this.imageOptions = options;
+
+      cdb.core.Loader.get(vizjson, this._onVisLoaded);
+
+      return this;
+
+    },
+
+    loadLayerDefinition: function(layerDefinition) {
+
+      var self = this;
+
+      this.queue = new Queue;
+
+      if (!layerDefinition.user_name) {
+        cartodb.log.error("Please, specify the username");
+        return;
+      }
+
+      this.options.user_name      = layerDefinition.user_name;
+      this.options.tiler_protocol = layerDefinition.tiler_protocol;
+      this.options.tiler_domain   = layerDefinition.tiler_domain;
+      this.options.tiler_port     = layerDefinition.tiler_port;
+      this.options.maps_api_template = layerDefinition.maps_api_template;
+      this.endPoint = "/api/v1/map";
+      if (!this.options.maps_api_template) {
+        this._buildMapsApiTemplate(this.options);
+      }
+
+      this.options.layers = layerDefinition;
+
+      this._requestLayerGroupID();
+
+    },
+
+    _onVisLoaded: function(data) {
+
+      if (data) {
+
+        var layerDefinition;
+        var baseLayer = data.layers[0];
+        var dataLayer = data.layers[1];
+
+        if (dataLayer.options) {
+          this.options.user_name = dataLayer.options.user_name;
+        }
+
+        // keep this for backward compatibility with tiler_* variables
+        if (!dataLayer.options.maps_api_template) {
+          this._setupTilerConfiguration(dataLayer.options.tiler_protocol, dataLayer.options.tiler_domain, dataLayer.options.tiler_port);
+        } else {
+          this.options.maps_api_template = dataLayer.options.maps_api_template;
+        }
+
+        this.auth_tokens = data.auth_tokens;
+
+        this.endPoint = "/api/v1/map";
+
+        var bbox = [];
+
+        var bounds = data.bounds;
+
+        if (bounds) {
+          bbox.push([bounds[0][1], bounds[0][0]]);
+          bbox.push([bounds[1][1], bounds[1][0]]);
+        }
+
+        this.imageOptions.zoom   = data.zoom;
+        this.imageOptions.center = JSON.parse(data.center);
+        this.imageOptions.bbox   = bbox;
+        this.imageOptions.bounds = data.bounds;
+
+        if (baseLayer && baseLayer.options) {
+          this.imageOptions.basemap = baseLayer;
+        }
+
+        /* If the vizjson contains a named map and a torque layer with a named map,
+           ignore the torque layer */
+
+        var ignoreTorqueLayer = false;
+
+        var namedMap = this._getLayerByType(data.layers, "namedmap");
+
+        if (namedMap) {
+
+          var torque = this._getLayerByType(data.layers, "torque");
+
+          if (torque && torque.options && torque.options.named_map) {
+
+            if (torque.options.named_map.name === namedMap.options.named_map.name) {
+              ignoreTorqueLayer = true;
+            }
+
+          }
+
+        }
+
+        var layers = [];
+        var basemap = this._getBasemapLayer();
+
+        if (basemap) {
+          layers.push(basemap);
+        }
+
+        for (var i = 1; i < data.layers.length; i++) {
+
+          var layer = data.layers[i];
+
+          if (layer.type === "torque" && !ignoreTorqueLayer) {
+
+            layers.push(this._getTorqueLayerDefinition(layer));
+
+          } else if (layer.type === "namedmap") {
+
+            layers.push(this._getNamedmapLayerDefinition(layer));
+
+          } else if (layer.type !== "torque" && layer.type !== "namedmap") {
+
+            var ll = this._getLayergroupLayerDefinition(layer);
+
+            for (var j = 0; j < ll.length; j++) {
+              layers.push(ll[j]);
+            }
+
+          }
+        }
+
+        this.options.layers = { layers: layers };
+        this._requestLayerGroupID();
+
+      }
+
+    },
+
+    visibleLayers: function() {
+      // Overwrites the layer_definition method.
+      // We return all the layers, since we have filtered them before
+      return this.options.layers.layers;
+    },
+
+    _getLayerByType: function(layers, type) {
+      return _.find(layers, function(layer) { return layer.type === type; });
+    },
+
+    _setupTilerConfiguration: function(protocol, domain, port) {
+
+      this.options.tiler_domain   = domain;
+      this.options.tiler_protocol = protocol;
+      this.options.tiler_port     = port;
+
+      this._buildMapsApiTemplate(this.options);
+
+    },
+
+    toJSON: function(){
+      return this.options.layers;
+    },
+
+    _requestLayerGroupID: function() {
+
+      var self = this;
+
+      this.getLayerToken(function(data, error) {
+
+        if (error) {
+          self.error = error;
+        }
+
+        if (data) {
+          self.imageOptions.layergroupid = data.layergroupid;
+          self.cdn_url = data.cdn_url;
+        }
+
+        self.queue.flush(this);
+
+      });
+
+    },
+
+    _getDefaultBasemapLayer: function() {
+
+      return {
+        type: "http",
+        options: {
+          urlTemplate: this.defaults.basemap_url_template,
+          subdomains:  this.defaults.basemap_subdomains
+        }
+      };
+
+    },
+
+    _getHTTPBasemapLayer: function(basemap) {
+
+      var urlTemplate = basemap.options.urlTemplate;
+
+      if (!urlTemplate) {
+        return null;
+      }
+
+      return {
+        type: "http",
+        options: {
+          urlTemplate: urlTemplate,
+          subdomains: basemap.options.subdomains || this.defaults.basemap_subdomains
+        }
+      };
+
+    },
+
+    _getPlainBasemapLayer: function(color) {
+
+      return {
+        type: "plain",
+        options: {
+          color: color
+        }
+      };
+
+    },
+
+    _getBasemapLayer: function() {
+
+      var basemap = this.userOptions.basemap || this.imageOptions.basemap;
+
+      if (basemap) {
+
+        // TODO: refactor this
+        var type = basemap.type.toLowerCase();
+
+        if (basemap.options && basemap.options.type) {
+          type = basemap.options.type.toLowerCase();
+        }
+
+        if (type === "plain") {
+          return this._getPlainBasemapLayer(basemap.options.color);
+        } else {
+          return this._getHTTPBasemapLayer(basemap);
+        }
+
+      }
+
+      return this._getDefaultBasemapLayer();
+
+    },
+
+    _getTorqueLayerDefinition: function(layer_definition) {
+
+      if (layer_definition.options.named_map) { // If the layer contains a named map inside, use it instead
+        return this._getNamedmapLayerDefinition(layer_definition);
+      }
+
+      var layerDefinition = new LayerDefinition(layer_definition, layer_definition.options);
+
+      var query    = layerDefinition.options.query || "SELECT * FROM " + layerDefinition.options.table_name;
+      var cartocss = layer_definition.options.tile_style;
+
+      return {
+        type: "torque",
+        options: {
+          sql: query,
+          cartocss: cartocss
+        }
+      };
+
+    },
+
+    _getLayergroupLayerDefinition: function(layer) {
+
+      var options = layer.options;
+
+      options.layer_definition.layers = this._getVisibleLayers(options.layer_definition.layers);
+
+      var layerDefinition = new LayerDefinition(options.layer_definition, options);
+
+      return layerDefinition.toJSON().layers;
+
+    },
+
+    _getNamedmapLayerDefinition: function(layer) {
+
+      var options = layer.options;
+
+      var layerDefinition = new NamedMap(options.named_map, options);
+
+      var options = {
+        name: layerDefinition.named_map.name
+      };
+
+      if (this.auth_tokens && this.auth_tokens.length > 0) {
+        options.auth_tokens = this.auth_tokens;
+      }
+
+      return {
+        type: "named",
+        options: options
+      }
+
+    },
+
+    _getVisibleLayers: function(layers) {
+      return _.filter(layers, function(layer) { return layer.visible; });
+    },
+
+    _getUrl: function() {
+
+      var username     = this.options.user_name;
+      var bbox         = this.imageOptions.bbox;
+      var layergroupid = this.imageOptions.layergroupid;
+      var zoom         = this.imageOptions.zoom   || this.defaults.zoom;
+      var center       = this.imageOptions.center || this.defaults.center;
+      var size         = this.imageOptions.size   || this.defaults.size;
+      var format       = this.imageOptions.format || this.defaults.format;
+
+      var lat    = center[0];
+      var lon    = center[1];
+
+      var width  = size[0];
+      var height = size[1];
+
+      var subhost = this.isHttps() ? null : "a";
+
+      var url = this._host(subhost) + this.endPoint;
+
+      if (bbox && bbox.length && !this.userOptions.override_bbox) {
+        return [url, "static/bbox" , layergroupid, bbox.join(","), width, height + "." + format].join("/");
+      } else {
+        return [url, "static/center" , layergroupid, zoom, lat, lon, width, height + "." + format].join("/");
+      }
+
+    },
+
+    // Generates a random string
+    _getUUID: function() {
+      var S4 = function() {
+        return (((1+Math.random())*0x10000)|0).toString(16).substring(1);
+      };
+      return (S4()+S4()+"-"+S4()+"-"+S4()+"-"+S4()+"-"+S4()+S4()+S4());
+    },
+
+    /* Setters */
+    _set: function(name, value) {
+
+      var self = this;
+
+      this.queue.add(function() {
+        self.imageOptions[name] = value;
+      });
+
+      return this;
+
+    },
+
+    zoom: function(zoom) {
+      return this._set("zoom", zoom);
+    },
+
+    bbox: function(bbox) {
+      return this._set("bbox", bbox);
+    },
+
+    center: function(center) {
+      this._set("bbox", null);
+      return this._set("center", center);
+    },
+
+    format: function(format) {
+      return this._set("format", _.include(this.supported_formats, format) ? format : this.defaults.format);
+    },
+
+    size: function(width, height) {
+      return this._set("size", [width, height === undefined ? width : height]);
+    },
+
+    /* Methods */
+
+    /* Image.into(HTMLImageElement)
+       inserts the image in the HTMLImageElement specified */
+    into: function(img) {
+
+      var self = this;
+
+      if (!(img instanceof HTMLImageElement)) {
+        cartodb.log.error("img should be an image");
+        return;
+      }
+
+      this.imageOptions.size = [img.width, img.height];
+
+      this.queue.add(function(response) {
+        img.src = self._getUrl();
+      });
+
+    },
+
+    /* Image.getUrl(callback(err, url))
+       gets the url for the image, err is null is there was no error */
+
+    getUrl: function(callback) {
+
+      var self = this;
+
+      this.queue.add(function() {
+        if (callback) {
+          callback(self.error, self._getUrl()); 
+        }
+      });
+
+    },
+
+    /* Image.write(attributes)
+       adds a img tag in the same place script is executed */
+
+    write: function(attributes) {
+
+      var self = this;
+
+      this.imageOptions.attributes = attributes;
+
+      if (attributes && attributes.src) {
+        document.write('<img id="' + this.imageOptions.temp_id + '" src="'  + attributes.src + '" />');
+      } else {
+        document.write('<img id="' + this.imageOptions.temp_id + '" />');
+      }
+
+      this.queue.add(function() {
+
+        var element = document.getElementById(self.imageOptions.temp_id);
+
+        element.src = self._getUrl();
+        element.removeAttribute("temp_id");
+
+        var attributes = self.imageOptions.attributes;
+
+        if (attributes && attributes.class) { element.setAttribute("class", attributes.class); }
+        if (attributes && attributes.id)    { element.setAttribute("id", attributes.id); }
+
+      });
+
+      return this;
+    }
+
+  })
+
+  cdb.Image = function(data, options) {
+
+    if (!options) options = {};
+
+    var image = new StaticImage();
+
+    if (typeof data === 'string') {
+      image.load(data, options);
+    } else {
+      image.loadLayerDefinition(data);
+    }
+
+    return image;
+
+  };
+
+})();
+(function() {
+
 cdb.vis.Overlay.register('logo', function(data, vis) {
 
 });
 
-// map mobile control
+cdb.vis.Overlay.register('slides_controller', function(data, vis) {
+
+  var slides_controller = new cdb.geo.ui.SlidesController({
+    transitions: data.transitions,
+    visualization: vis
+  });
+
+  return slides_controller.render();
+
+});
+
 cdb.vis.Overlay.register('mobile', function(data, vis) {
 
   var template = cdb.core.Template.compile(
     data.template || '\
+    <div class="backdrop"></div>\
+    <div class="cartodb-header">\
+      <div class="content">\
+        <a href="#" class="fullscreen"></a>\
+        <a href="#" class="toggle"></a>\
+        </div>\
+      </div>\
+    </div>\
+    <div class="aside">\
+    <div class="layer-container">\
+    <div class="scrollpane"><ul class="layers"></ul></div>\
+    </div>\
+    </div>\
+    <div class="cartodb-attribution"></div>\
+    <a href="#" class="cartodb-attribution-button"></a>\
     <div class="torque"></div>\
-    <div class="top-shadow"></div>\
-    <div class="bottom-shadow"></div>\
-    <div class="legends"></div>\
-    <a class="toggle" href="#"></a>\
     ',
     data.templateType || 'mustache'
   );
 
   var mobile = new cdb.geo.ui.Mobile({
     template: template,
+    mapView: vis.mapView,
+    overlays: data.overlays,
+    transitions: data.transitions,
+    slides_data: data.slides,
+    visualization: vis,
+    layerView: data.layerView,
+    visibility_options: data.options,
     torqueLayer: data.torqueLayer,
-    legends: data.legends,
     map: data.map
   });
 
@@ -32156,10 +39680,6 @@ cdb.vis.Overlay.register('mobile', function(data, vis) {
 cdb.vis.Overlay.register('image', function(data, vis) {
 
   var options = data.options;
-
-  var isDevice = options.device == "mobile" ? true : false;
-
-  if (vis.device !== isDevice) return;
 
   var template = cdb.core.Template.compile(
     data.template || '\
@@ -32182,10 +39702,6 @@ cdb.vis.Overlay.register('text', function(data, vis) {
 
   var options = data.options;
 
-  var isDevice = options.device == "mobile" ? true : false;
-
-  if (vis.device !== isDevice) return;
-
   var template = cdb.core.Template.compile(
     data.template || '\
     <div class="content">\
@@ -32203,6 +39719,38 @@ cdb.vis.Overlay.register('text', function(data, vis) {
   return widget.render();
 
 });
+
+cdb.vis.Overlay.register('annotation', function(data, vis) {
+
+  var options = data.options;
+
+  var template = cdb.core.Template.compile(
+    data.template || '\
+    <div class="content">\
+    <div class="text widget_text">{{{ text }}}</div>\
+    <div class="stick"><div class="ball"></div></div>\
+    </div>',
+    data.templateType || 'mustache'
+  );
+
+  var options = data.options;
+
+  var widget = new cdb.geo.ui.Annotation({
+    className: "cartodb-overlay overlay-annotation " + options.device,
+    template: template,
+    mapView: vis.mapView,
+    device: options.device,
+    text: options.extra.rendered_text,
+    minZoom: options.style["min-zoom"],
+    maxZoom: options.style["max-zoom"],
+    latlng: options.extra.latlng,
+    style: options.style
+  });
+
+  return widget.render();
+
+});
+
 
 cdb.vis.Overlay.register('zoom_info', function(data, vis) {
   //console.log("placeholder for the zoom_info overlay");
@@ -32223,6 +39771,8 @@ cdb.vis.Overlay.register('header', function(data, vis) {
 
   var widget = new cdb.geo.ui.Header({
     model: new cdb.core.Model(options),
+    transitions: data.transitions,
+    slides: vis.slides,
     template: template
   });
 
@@ -32348,17 +39898,16 @@ cdb.vis.Overlay.register('infowindow', function(data, vis) {
 
   var infowindowModel = new cdb.geo.ui.InfowindowModel({
     template: data.template,
+    template_type: data.templateType,
     alternative_names: data.alternative_names,
     fields: data.fields,
     template_name: data.template_name
   });
 
-  var templateType = data.templateType || 'mustache';
-
   var infowindow = new cdb.geo.ui.Infowindow({
      model: infowindowModel,
      mapView: vis.mapView,
-     template: new cdb.core.Template({ template: data.template, type: templateType}).asFunction()
+     template: data.template
   });
 
   return infowindow;
@@ -32393,19 +39942,18 @@ cdb.vis.Overlay.register('layer_selector', function(data, vis) {
     layer_names: data.layer_names
   });
 
+  var timeSlider = vis.timeSlider;
+  if (timeSlider) {
+    layerSelector.bind('change:visible', function(visible, order, layer) {
+      if (layer.get('type') === 'torque') {
+        timeSlider[visible ? 'show': 'hide']();
+      }
+    });
+  }
   if (vis.legends) {
 
     layerSelector.bind('change:visible', function(visible, order, layer) {
 
-      if (layer.get('type') === 'torque') {
-
-        var timeSlider = vis.getOverlay('time_slider');
-
-        if (timeSlider) {
-          timeSlider[visible ? 'show': 'hide']();
-        }
-
-      }
 
       if (layer.get('type') === 'layergroup' || layer.get('type') === 'torque') {
 
@@ -32499,23 +40047,12 @@ cdb.vis.Overlay.register('search', function(data, vis) {
 
 // tooltip
 cdb.vis.Overlay.register('tooltip', function(data, vis) {
-  var layer;
-  if (!data.layer) {
-    var layers = vis.getLayers();
-    if(layers.length > 1) {
-      layer = layers[1];
-    }
-    data.layer = layer;
-  }
-
-  if (!data.layer) {
+  if (!data.layer && vis.getLayers().length <= 1) {
     throw new Error("layer is null");
   }
-
+  data.layer = data.layer || vis.getLayers()[1];
   data.layer.setInteraction(true);
-  var tooltip = new cdb.geo.ui.Tooltip(data);
-  return tooltip;
-
+  return new cdb.geo.ui.Tooltip(data);
 });
 
 cdb.vis.Overlay.register('infobox', function(data, vis) {
@@ -32641,6 +40178,7 @@ Layers.register('namedmap', function(vis, data) {
 });
 
 Layers.register('torque', function(vis, data) {
+  normalizeOptions(vis, data);
   // default is https
   if(vis.https) {
     if(data.sql_api_domain && data.sql_api_domain.indexOf('cartodb.com') !== -1) {
@@ -32704,7 +40242,7 @@ Layers.register('torque', function(vis, data) {
       url = layer;
     }
     if(url) {
-      cdb.vis.Loader.get(url, callback);
+      cdb.core.Loader.get(url, callback);
     } else {
       _.defer(function() { callback(null); });
     }
@@ -32713,7 +40251,7 @@ Layers.register('torque', function(vis, data) {
   /**
    * create a layer for the specified map
    *
-   * @param map should be a L.Map or google.maps.Map object
+   * @param map should be a L.Map object, or equivalent depending on what provider you have.
    * @param layer should be an url or a javascript object with the data to create the layer
    * @param options layer options
    *
@@ -32816,21 +40354,50 @@ Layers.register('torque', function(vis, data) {
 
       function createLayer() {
         layerView = viz.createLayer(layerData, { no_base_layer: true });
+
+        var torqueLayer;
+        var mobileEnabled = /Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        var addMobileLayout = (options.mobile_layout && mobileEnabled) || options.force_mobile;
+
         if(!layerView) {
           promise.trigger('error', "layer not supported");
           return promise;
         }
+
         if(options.infowindow) {
           viz.addInfowindow(layerView);
         }
+
         if(options.tooltip) {
           viz.addTooltip(layerView);
         }
+
         if(options.legends) {
-          viz.addLegends([layerData]);
+          var layerModel = cdb.vis.Layers.create(layerData.type || layerData.kind, viz, layerData);
+
+          viz._addLegends(viz._createLayerLegendView(layerModel.attributes,  layerView))
         }
+
         if(options.time_slider && layerView.model.get('type') === 'torque') {
-          viz.addTimeSlider(layerView);
+
+          if (!addMobileLayout) { // don't add the overlay if we are in mobile
+            viz.addTimeSlider(layerView);
+          }
+
+          torqueLayer = layerView;
+        }
+
+        if (addMobileLayout) {
+
+          options.mapView = map.viz.mapView;
+
+          viz.addOverlay({
+            type: 'mobile',
+            layerView: layerView,
+            overlays: [],
+            torqueLayer: torqueLayer,
+            options: options
+          });
         }
 
         callback && callback(layerView);
@@ -32884,19 +40451,25 @@ Layers.register('torque', function(vis, data) {
       protocol: loc,
       jsonp: typeof(jQuery) !== 'undefined' ? !jQuery.support.cors: false
     })
+
+    if (!this.options.sql_api_template) {
+      var opts = this.options;
+      var template = null;
+      if(opts && opts.completeDomain) {
+        template = opts.completeDomain;
+      } else {
+        var host = opts.host || 'cartodb.com';
+        var protocol = opts.protocol || 'https';
+        template = protocol + '://{user}.' + host;
+      }
+      this.options.sql_api_template = template;
+    }
   }
 
   SQL.prototype._host = function() {
     var opts = this.options;
-    if(opts && opts.completeDomain) {
-      return opts.completeDomain + '/api/' +  opts.version + '/sql'
-    } else {
-      var host = opts.host || 'cartodb.com';
-      var protocol = opts.protocol || 'https';
-
-      return protocol + '://' + opts.user + '.' + host + '/api/' +  opts.version + '/sql';
-    }
-  }
+    return opts.sql_api_template.replace('{user}', opts.user) + '/api/' +  opts.version + '/sql';
+  },
 
   /**
    * var sql = new SQL('cartodb_username');
@@ -32906,6 +40479,10 @@ Layers.register('torque', function(vis, data) {
    * })
    */
   SQL.prototype.execute = function(sql, vars, options, callback) {
+
+    //Variable that defines if a query should be using get method or post method
+    var MAX_LENGTH_GET_QUERY = 1024;
+
     var promise = new cartodb._Promise();
     if(!sql) {
       throw new TypeError("sql should not be null");
@@ -32923,13 +40500,16 @@ Layers.register('torque', function(vis, data) {
       crossDomain: true
     };
 
-    if(options.jsonp) {
-      delete params.crossDomain;
-      params.dataType = 'jsonp';
+    if(options.cache !== undefined) {
+      params.cache = options.cache; 
     }
 
-    if(options.cache) {
-      params.cache = options.cache; 
+    if(options.jsonp) {
+      delete params.crossDomain;
+      if (options.jsonpCallback) {
+        params.jsonpCallback = options.jsonpCallback;
+      }
+      params.dataType = 'jsonp';
     }
 
     // Substitute mapnik tokens
@@ -32943,28 +40523,46 @@ Layers.register('torque', function(vis, data) {
 
     // create query
     var query = Mustache.render(sql, vars);
-    var q = 'q=' + encodeURIComponent(query);
 
-    // request params
+    // check method: if we are going to send by get or by post
+    var isGetRequest = query.length < MAX_LENGTH_GET_QUERY;
+
+    // generate url depending on the http method
     var reqParams = ['format', 'dp', 'api_key'];
+    // request params
     if (options.extra_params) {
       reqParams = reqParams.concat(options.extra_params);
     }
-    for(var i in reqParams) {
-      var r = reqParams[i];
-      var v = options[r];
-      if(v) {
-        q += '&' + r + "=" + v;
-      }
-    }
 
-    var isGetRequest = options.type ? options.type == 'get' : params.type == 'get';
-    // generate url depending on the http method
     params.url = this._host() ;
-    if(isGetRequest) {
-      params.url += '?' + q
+    if (isGetRequest) {
+      var q = 'q=' + encodeURIComponent(query);
+      for(var i in reqParams) {
+        var r = reqParams[i];
+        var v = options[r];
+        if(v) {
+          q += '&' + r + "=" + v;
+        }
+      }
+
+      params.url += '?' + q;
     } else {
-      params.data = q;
+      var objPost = {'q': query};
+      for(var i in reqParams) {
+        var r = reqParams[i];
+        var v = options[r];
+        if (v) {
+          objPost[r] = v;
+        }
+      }
+
+      params.data = objPost;
+      //Check if we are using jQuery(uncompressed) or reqwest (core)
+      if ((typeof(jQuery) !== 'undefined')) {
+        params.type = 'post';
+      } else {
+        params.method = 'post'; 
+      }
     }
 
     // wrap success and error functions
@@ -32986,9 +40584,15 @@ Layers.register('torque', function(vis, data) {
         xhr = resp;
         resp = JSON.parse(resp.response);
       }
-      promise.trigger('done', resp, status, xhr);
-      if(success) success(resp, status, xhr);
-      if(callback) callback(resp);
+      //Timeout explanation. CartoDB.js ticket #336
+      //From St.Ov.: "what setTimeout does is add a new event to the browser event queue 
+      //and the rendering engine is already in that queue (not entirely true, but close enough) 
+      //so it gets executed before the setTimeout event."
+      setTimeout(function() {
+        promise.trigger('done', resp, status, xhr);
+        if(success) success(resp, status, xhr);
+        if(callback) callback(resp);
+      }, 0);
     }
 
     // call ajax

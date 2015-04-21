@@ -20,6 +20,7 @@ module CartoDB
         query
         tile_style
         named_map
+        visible
       )
 
       INFOWINDOW_KEYS = %w(
@@ -31,16 +32,18 @@ module CartoDB
         @options          = options
         @configuration    = configuration
         @decoration_data  = decoration_data
-      end #initialize
+      end
 
       def to_vizjson_v2
         if base?(layer)
-          with_kind_as_type(layer.public_values) 
+          with_kind_as_type(layer.public_values.merge(children_for(layer)))
         elsif torque?(layer)
           as_torque
         else
           {
             id:         layer.id,
+            parent_id:  layer.parent_id,
+            children:   children_for(layer, false),
             type:       'CartoDB',
             infowindow: infowindow_data_v2,
             tooltip:    tooltip_data_v2,
@@ -50,21 +53,23 @@ module CartoDB
             options:    options_data_v2
           }
         end
-      end #to_vizjson_v2
+      end
 
       def to_vizjson_v1
-        return layer.public_values if base?(layer)
+        return layer.public_values.merge(children_for(layer)) if base?(layer)
         {
           id:         layer.id,
+          parent_id:  layer.parent_id,
+          children:   children_for(layer, false),
           kind:       'CartoDB',
           infowindow: infowindow_data_v1,
           order:      layer.order,
           options:    options_data_v1
         }
-      end #to_vizjson_v1
+      end
 
       def to_poro
-        poro = layer.public_values
+        poro = layer.public_values.merge(children_for(layer))
         if options[:viewer_user] and poro['options'] and poro['options']['table_name']
           # if the table_name already have a schema don't add another one
           # this case happens when you share a layer already shared with you
@@ -85,6 +90,11 @@ module CartoDB
 
       attr_reader :layer, :options, :configuration
 
+      def children_for(layer, as_hash=true)
+        items = layer.children.nil? ? [] : layer.children.map { |child_layer| { id: child_layer.id } }
+        as_hash ? { children: items } : items
+      end
+
       # Decorates the layer presentation with data if needed. nils on the decoration act as removing the field
       def decorate_with_data(source_hash, decoration_data=nil)
         if not decoration_data.nil?
@@ -96,42 +106,50 @@ module CartoDB
           }
         end
         source_hash
-      end #decorate_with_data
+      end
 
       def base?(layer)
         ['tiled', 'background', 'gmapsbase', 'wms'].include? layer.kind
-      end #base?
+      end
 
       def torque?(layer)
         layer.kind == 'torque'
-      end #torque?
+      end
 
       def with_kind_as_type(attributes)
         decorate_with_data(attributes.merge(type: attributes.delete('kind')), @decoration_data)
-      end #with_kind_as_type
+      end
 
       def as_torque
         # Make torque always have a SQL query too (as vizjson v2)
         layer.options['query'] = wrap(sql_from(layer.options), layer.options)
 
+        api_templates_type = options.fetch(:https_request, false) ? 'private' : 'public'
         layer_options = decorate_with_data(layer.options, @decoration_data)
 
         {
           id:         layer.id,
+          parent_id:  layer.parent_id,
+          children:   children_for(layer, false),
           type:       'torque',
           order:      layer.order,
           legend:     layer.legend,
           options:    {
             stat_tag:           options.fetch(:visualization_id),
+            maps_api_template: ApplicationHelper.maps_api_template(api_templates_type),
+            sql_api_template: ApplicationHelper.sql_api_template(api_templates_type),
+            # tiler_* is kept for backwards compatibility
             tiler_protocol:     (configuration[:tiler]["public"]["protocol"] rescue nil),
             tiler_domain:       (configuration[:tiler]["public"]["domain"] rescue nil),
             tiler_port:         (configuration[:tiler]["public"]["port"] rescue nil),
+            # sql_api_* is kept for backwards compatibility
             sql_api_protocol:   (configuration[:sql_api]["public"]["protocol"] rescue nil),
             sql_api_domain:     (configuration[:sql_api]["public"]["domain"] rescue nil),
             sql_api_endpoint:   (configuration[:sql_api]["public"]["endpoint"] rescue nil),
             sql_api_port:       (configuration[:sql_api]["public"]["port"] rescue nil),
             cdn_url:            configuration.fetch(:cdn_url, nil),
-            layer_name:         name_for(layer)
+            layer_name:         name_for(layer),
+            dynamic_cdn:        options[:viewer_user] ? options[:viewer_user].dynamic_cdn_enabled : false
           }.merge(
             layer_options.select { |k| TORQUE_ATTRS.include? k })
         }
@@ -176,14 +194,16 @@ module CartoDB
           }
           data = decorate_with_data(data, @decoration_data)
 
-          if options[:viewer_user]
-            unless data['user_name'] == options[:viewer_user].username
+          viewer = options[:viewer_user]
+          if viewer
+            unless data['user_name'] == viewer.username
               data['table_name'] = "\"#{data['user_name']}\".#{data['table_name']}"
             end
+            data['dynamic_cdn'] = viewer.dynamic_cdn_enabled
           end
           data
         end
-      end #options_data_v2
+      end
 
       def name_for(layer)
         layer_alias = layer.options.fetch('table_name_alias', nil)
@@ -196,24 +216,24 @@ module CartoDB
       def options_data_v1
         return layer.options if options[:full]
         layer.options.select { |key, value| public_options.include?(key.to_s) }
-      end #options_data
+      end
 
       def sql_from(options)
         query = options.fetch('query', '')
         return default_query_for(options) if query.nil? || query.empty?
         query
-      end #sql_from
+      end
 
       def css_from(options)
         style = options.include?('tile_style') ? options['tile_style'] : nil
         (style.nil? || style.strip.empty?) ? EMPTY_CSS : options.fetch('tile_style')
-      end #css_from
+      end
 
       def wrap(query, options)
         wrapper = options.fetch('query_wrapper', nil)
         return query if wrapper.nil? || wrapper.empty?
         EJS.evaluate(wrapper, sql: query)
-      end #wrap
+      end
 
       def default_query_for(layer_options)
         if options[:viewer_user]
@@ -222,12 +242,12 @@ module CartoDB
           end
         end
         "select * from #{layer_options.fetch('table_name')}"
-      end #defaut_query_for
+      end
 
       def public_options
         return configuration if configuration.empty?
         configuration.fetch(:layer_opts).fetch("public_opts")
-      end #public_options
+      end
 
       def whitelisted_infowindow(infowindow)
         infowindow.select { |key, value| 
